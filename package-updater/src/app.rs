@@ -460,7 +460,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 // Only sync if we're not already checking and haven't checked very recently
                 if !self.checking_updates && self.config.package_manager.is_some() {
                     let should_sync = self.last_check.map_or(true, |last| {
-                        last.elapsed().as_secs() > 3 // Only sync if our last check was more than 3 seconds ago
+                        last.elapsed().as_secs() > 10 // Only sync if our last check was more than 10 seconds ago
                     });
 
                     if should_sync {
