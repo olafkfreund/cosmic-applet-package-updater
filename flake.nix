@@ -1,0 +1,175 @@
+{
+  description = "COSMIC Package Updater Applet - NixOS update notifications for COSMIC Desktop";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    crane.url = "github:ipetkov/crane";
+    flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { self, nixpkgs, crane, flake-utils, rust-overlay }:
+    let
+      # Overlay to add this package to nixpkgs
+      overlay = final: prev: {
+        cosmic-ext-applet-package-updater = self.packages.${prev.system}.default;
+      };
+    in
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        overlays = [ (import rust-overlay) ];
+        pkgs = import nixpkgs {
+          inherit system overlays;
+        };
+
+        # Crane library for building Rust projects
+        craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
+
+        # Source filtering - include res/ directory for resources
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            let
+              baseName = baseNameOf (toString path);
+              isRes = (type == "directory") && (baseName == "res");
+              isInRes = pkgs.lib.hasInfix "/res/" path;
+            in
+              isRes ||
+              isInRes ||
+              (craneLib.filterCargoSources path type);
+        };
+
+        # Common arguments for all crane builds
+        commonArgs = {
+          inherit src;
+          strictDeps = true;
+
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            just
+          ];
+
+          buildInputs = with pkgs; [
+            libxkbcommon
+            wayland
+            expat
+            fontconfig
+            freetype
+          ];
+
+          # Only build the package-updater workspace member
+          cargoExtraArgs = "-p cosmic-ext-applet-package-updater";
+        };
+
+        # Build dependencies only (for caching)
+        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+        # Build the actual package
+        package = craneLib.buildPackage (commonArgs // {
+          inherit cargoArtifacts;
+
+          pname = "cosmic-ext-applet-package-updater";
+          version = "1.0.0";
+
+          # Install resources
+          postInstall = ''
+            mkdir -p $out/share/applications
+            mkdir -p $out/share/metainfo
+            mkdir -p $out/share/icons/hicolor
+
+            # Copy desktop file and metainfo from source
+            cp $src/res/com.github.cosmic_ext.PackageUpdater.desktop $out/share/applications/
+            cp $src/res/com.github.cosmic_ext.PackageUpdater.metainfo.xml $out/share/metainfo/
+
+            # Copy icons
+            for size in 16 24 32 48 64 128 256; do
+              if [ -d "$src/res/icons/hicolor/''${size}x''${size}/apps" ]; then
+                mkdir -p $out/share/icons/hicolor/''${size}x''${size}/apps
+                cp $src/res/icons/hicolor/''${size}x''${size}/apps/com.github.cosmic_ext.PackageUpdater.svg \
+                   $out/share/icons/hicolor/''${size}x''${size}/apps/ || true
+              fi
+            done
+          '';
+
+          meta = with pkgs.lib; {
+            description = "Package update notifier applet for COSMIC desktop with NixOS support";
+            longDescription = ''
+              A COSMIC desktop applet that monitors package updates from multiple package managers
+              including NixOS (both Flakes and Channels), Pacman, APT, DNF, and Flatpak.
+
+              For NixOS, it provides:
+              - Automatic detection of Flakes vs Channels mode
+              - Dry-run update checking (shows updates without applying them)
+              - Configurable NixOS config path
+              - Integration with nixos-rebuild and nix flake commands
+            '';
+            homepage = "https://github.com/olafkfreund/cosmic-applet-package-updater";
+            license = licenses.gpl3Only;
+            maintainers = [ ];
+            platforms = platforms.linux;
+            mainProgram = "cosmic-ext-applet-package-updater";
+          };
+        });
+      in
+      {
+        packages = {
+          default = package;
+          cosmic-ext-applet-package-updater = package;
+        };
+
+        # Development shell
+        devShells.default = pkgs.mkShell {
+          inputsFrom = [ package ];
+
+          buildInputs = with pkgs; [
+            # Additional development tools
+            rust-analyzer
+            rustfmt
+            clippy
+          ];
+
+          shellHook = ''
+            echo "🚀 COSMIC Package Updater development environment"
+            echo ""
+            echo "Available commands:"
+            echo "  just build-release  - Build release version"
+            echo "  just run           - Run with debug logging"
+            echo "  just check         - Run clippy checks"
+            echo ""
+            echo "Nix commands:"
+            echo "  nix build           - Build the package with crane"
+            echo "  nix run             - Run the applet directly"
+            echo ""
+          '';
+        };
+
+        # Apps for easy running
+        apps.default = {
+          type = "app";
+          program = "${package}/bin/cosmic-ext-applet-package-updater";
+        };
+
+        # Checks for CI
+        checks = {
+          inherit package;
+
+          # Clippy check
+          clippy = craneLib.cargoClippy (commonArgs // {
+            inherit cargoArtifacts;
+            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+          });
+
+          # Format check
+          fmt = craneLib.cargoFmt {
+            inherit src;
+          };
+        };
+      }
+    ) // {
+      # Make overlay available at top level
+      overlays.default = overlay;
+    };
+}

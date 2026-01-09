@@ -6,6 +6,27 @@ use crate::package_manager::PackageManager;
 pub const CONFIG_VERSION: u64 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NixOSMode {
+    Channels,
+    Flakes,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NixOSConfig {
+    pub mode: NixOSMode,
+    pub config_path: String,
+}
+
+impl Default for NixOSConfig {
+    fn default() -> Self {
+        Self {
+            mode: NixOSMode::Flakes,
+            config_path: "/etc/nixos".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PackageUpdaterConfig {
     pub package_manager: Option<PackageManager>,
     pub check_interval_minutes: u32,
@@ -14,6 +35,7 @@ pub struct PackageUpdaterConfig {
     pub show_notifications: bool,
     pub show_update_count: bool,
     pub preferred_terminal: String,
+    pub nixos_config: NixOSConfig,
 }
 
 impl Default for PackageUpdaterConfig {
@@ -26,6 +48,7 @@ impl Default for PackageUpdaterConfig {
             show_notifications: true,
             show_update_count: true,
             preferred_terminal: "cosmic-term".to_string(),
+            nixos_config: NixOSConfig::default(),
         }
     }
 }

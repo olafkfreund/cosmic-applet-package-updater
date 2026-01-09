@@ -10,7 +10,7 @@ use cosmic::Element;
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
 
-use crate::config::PackageUpdaterConfig;
+use crate::config::{PackageUpdaterConfig, NixOSMode};
 use crate::package_manager::{PackageManager, PackageManagerDetector, UpdateChecker, UpdateInfo};
 
 pub struct CosmicAppletPackageUpdater {
@@ -54,6 +54,9 @@ pub enum Message {
     ToggleShowUpdateCount(bool),
     SetPreferredTerminal(String),
     SyncFileChanged,
+    SetNixOSMode(NixOSMode),
+    SetNixOSConfigPath(String),
+    AutoDetectNixOSMode,
 }
 
 impl cosmic::Application for CosmicAppletPackageUpdater {
@@ -61,7 +64,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
     type Flags = ();
     type Message = Message;
 
-    const APP_ID: &'static str = "com.cosmic.PackageUpdater";
+    const APP_ID: &'static str = "com.github.cosmic_ext.PackageUpdater";
 
     fn core(&self) -> &Core {
         &self.core
@@ -282,9 +285,10 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                     self.error_message = None;
                     let checker = UpdateChecker::new(pm);
                     let include_aur = self.config.include_aur_updates;
+                    let nixos_config = self.config.nixos_config.clone();
                     return Task::perform(
                         async move {
-                            checker.check_updates(include_aur).await
+                            checker.check_updates(include_aur, &nixos_config).await
                         },
                         |result| cosmic::Action::App(Message::UpdatesChecked(result.map_err(|e| e.to_string()))),
                     );
@@ -471,6 +475,24 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 } else {
                     Task::none()
                 }
+            }
+            Message::SetNixOSMode(mode) => {
+                let mut config = self.config.clone();
+                config.nixos_config.mode = mode;
+                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+            }
+            Message::SetNixOSConfigPath(path) => {
+                let mut config = self.config.clone();
+                config.nixos_config.config_path = path;
+                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+            }
+            Message::AutoDetectNixOSMode => {
+                let config_path = self.config.nixos_config.config_path.clone();
+                let detected_mode = PackageManagerDetector::detect_nixos_mode(&config_path);
+
+                let mut config = self.config.clone();
+                config.nixos_config.mode = detected_mode;
+                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
             }
         }
     }
@@ -789,6 +811,58 @@ impl CosmicAppletPackageUpdater {
         }
 
         widgets.push(Space::with_height(cosmic::iced::Length::Fixed(16.0)).into());
+
+        // NixOS-specific settings (only show if NixOS is selected)
+        if self.config.package_manager == Some(PackageManager::NixOS) {
+            widgets.push(text("NixOS Configuration").size(16).into());
+
+            // Mode selection: Flakes vs Channels
+            let flakes_selected = matches!(self.config.nixos_config.mode, NixOSMode::Flakes);
+            widgets.push(
+                row()
+                    .spacing(8)
+                    .push(
+                        button::text(if flakes_selected { "● Flakes" } else { "○ Flakes" })
+                            .on_press(Message::SetNixOSMode(NixOSMode::Flakes))
+                            .width(cosmic::iced::Length::Fill)
+                    )
+                    .push(
+                        button::text(if !flakes_selected { "● Channels" } else { "○ Channels" })
+                            .on_press(Message::SetNixOSMode(NixOSMode::Channels))
+                            .width(cosmic::iced::Length::Fill)
+                    )
+                    .into()
+            );
+
+            widgets.push(Space::with_height(cosmic::iced::Length::Fixed(8.0)).into());
+
+            // Config path input
+            widgets.push(text("Configuration Path").size(14).into());
+            widgets.push(
+                text_input("/etc/nixos", &self.config.nixos_config.config_path)
+                    .on_input(Message::SetNixOSConfigPath)
+                    .width(cosmic::iced::Length::Fill)
+                    .into()
+            );
+
+            // Help text
+            widgets.push(
+                text("Path to your NixOS configuration directory")
+                    .size(10)
+                    .into()
+            );
+
+            // Auto-detection button
+            widgets.push(Space::with_height(cosmic::iced::Length::Fixed(8.0)).into());
+            widgets.push(
+                button::text("Auto-detect Mode")
+                    .on_press(Message::AutoDetectNixOSMode)
+                    .width(cosmic::iced::Length::Fill)
+                    .into()
+            );
+
+            widgets.push(Space::with_height(cosmic::iced::Length::Fixed(16.0)).into());
+        }
 
         // Check interval
         widgets.push(text("Check Interval (minutes)").size(14).into());

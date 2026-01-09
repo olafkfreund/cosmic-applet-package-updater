@@ -22,6 +22,8 @@ pub enum PackageManager {
     Apk,
     // Universal
     Flatpak,
+    // NixOS
+    NixOS,
 }
 
 impl PackageManager {
@@ -35,6 +37,7 @@ impl PackageManager {
             PackageManager::Zypper => "zypper",
             PackageManager::Apk => "apk",
             PackageManager::Flatpak => "flatpak",
+            PackageManager::NixOS => "nixos",
         }
     }
 
@@ -53,6 +56,7 @@ impl PackageManager {
             PackageManager::Zypper => "sudo zypper update".to_string(),
             PackageManager::Apk => "sudo apk upgrade".to_string(),
             PackageManager::Flatpak => "flatpak update".to_string(),
+            PackageManager::NixOS => "sudo nixos-rebuild switch".to_string(),
         }
     }
 }
@@ -111,6 +115,8 @@ impl PackageManagerDetector {
             PackageManager::Dnf,
             PackageManager::Zypper,
             PackageManager::Apk,
+            // NixOS
+            PackageManager::NixOS,
             // Universal package managers
             PackageManager::Flatpak,
         ] {
@@ -127,11 +133,40 @@ impl PackageManagerDetector {
     }
 
     fn is_available(pm: PackageManager) -> bool {
-        Command::new("which")
-            .arg(pm.name())
+        match pm {
+            PackageManager::NixOS => Self::is_nixos_available(),
+            _ => Command::new("which")
+                .arg(pm.name())
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false),
+        }
+    }
+
+    fn is_nixos_available() -> bool {
+        // Check if nixos-rebuild exists
+        let nixos_rebuild = Command::new("which")
+            .arg("nixos-rebuild")
             .output()
             .map(|output| output.status.success())
-            .unwrap_or(false)
+            .unwrap_or(false);
+
+        if !nixos_rebuild {
+            return false;
+        }
+
+        // Check if we're actually on NixOS
+        std::path::Path::new("/etc/NIXOS").exists() ||
+        std::path::Path::new("/run/current-system").exists()
+    }
+
+    pub fn detect_nixos_mode(config_path: &str) -> crate::config::NixOSMode {
+        let flake_path = std::path::Path::new(config_path).join("flake.nix");
+        if flake_path.exists() {
+            crate::config::NixOSMode::Flakes
+        } else {
+            crate::config::NixOSMode::Channels
+        }
     }
 }
 
@@ -194,7 +229,7 @@ impl UpdateChecker {
         }
     }
 
-    pub async fn check_updates(&self, include_aur: bool) -> Result<UpdateInfo> {
+    pub async fn check_updates(&self, include_aur: bool, nixos_config: &crate::config::NixOSConfig) -> Result<UpdateInfo> {
         // Try to acquire lock first
         let _lock = match Self::acquire_lock().await {
             Ok(lock) => lock,
@@ -213,7 +248,7 @@ impl UpdateChecker {
         let mut update_info = UpdateInfo::new();
 
         // Step 1: Check official updates first and wait for completion
-        match self.check_official_updates().await {
+        match self.check_official_updates(nixos_config).await {
             Ok(official_updates) => {
                 let count = official_updates.len();
                 update_info.official_updates = count;
@@ -223,7 +258,7 @@ impl UpdateChecker {
                 eprintln!("Failed to check official updates: {}", e);
                 // Retry once after a delay
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                match self.check_official_updates().await {
+                match self.check_official_updates(nixos_config).await {
                     Ok(official_updates) => {
                         let count = official_updates.len();
                         update_info.official_updates = count;
@@ -274,7 +309,7 @@ impl UpdateChecker {
         Ok(update_info)
     }
 
-    async fn check_official_updates(&self) -> Result<Vec<PackageUpdate>> {
+    async fn check_official_updates(&self, nixos_config: &crate::config::NixOSConfig) -> Result<Vec<PackageUpdate>> {
         let (cmd, args) = match self.package_manager {
             // Arch-based systems
             PackageManager::Pacman | PackageManager::Paru | PackageManager::Yay => {
@@ -299,6 +334,10 @@ impl UpdateChecker {
             // Flatpak
             PackageManager::Flatpak => {
                 ("flatpak", vec!["remote-ls", "--updates"])
+            }
+            // NixOS
+            PackageManager::NixOS => {
+                return self.check_nixos_updates(nixos_config).await;
             }
         };
 
@@ -520,9 +559,209 @@ impl UpdateChecker {
                     });
                 }
             }
+
+            // NixOS: Handled separately by check_nixos_updates, never reaches this function
+            PackageManager::NixOS => {
+                return None;
+            }
         }
 
         None
+    }
+
+    async fn check_nixos_channels(&self) -> Result<Vec<PackageUpdate>> {
+        // Run nixos-rebuild dry-activate with upgrade flag
+        let output = TokioCommand::new("sudo")
+            .args(&["nixos-rebuild", "dry-activate", "--upgrade"])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Check if it's a permission issue
+            if stderr.contains("not allowed") || stderr.contains("password") || stderr.contains("sudo") {
+                return Err(anyhow!(
+                    "Permission denied. Configure passwordless sudo for nixos-rebuild:\n\
+                     Add to /etc/sudoers.d/nixos-rebuild:\n\
+                     %wheel ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/nixos-rebuild"
+                ));
+            }
+
+            return Err(anyhow!("Failed to check NixOS updates: {}", stderr));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Combine stdout and stderr as nixos-rebuild outputs to both
+        let combined_output = format!("{}\n{}", stdout, stderr);
+
+        // Parse output to detect changes
+        self.parse_nixos_rebuild_output(&combined_output)
+    }
+
+    fn parse_nixos_rebuild_output(&self, output: &str) -> Result<Vec<PackageUpdate>> {
+        let mut updates = Vec::new();
+        let mut in_changes_section = false;
+        let mut section_name = String::new();
+
+        for line in output.lines() {
+            // Detect section headers
+            if line.contains("would start the following units:") {
+                in_changes_section = true;
+                section_name = "start".to_string();
+                continue;
+            } else if line.contains("would restart the following units:") {
+                in_changes_section = true;
+                section_name = "restart".to_string();
+                continue;
+            } else if line.contains("would reload the following units:") {
+                in_changes_section = true;
+                section_name = "reload".to_string();
+                continue;
+            } else if line.contains("would stop the following units:") {
+                in_changes_section = true;
+                section_name = "stop".to_string();
+                continue;
+            }
+
+            // Empty line or new section ends current section
+            if line.trim().is_empty() || line.starts_with("would ") {
+                if in_changes_section && !line.starts_with("  ") {
+                    in_changes_section = false;
+                }
+            }
+
+            // Parse unit/service name from indented lines
+            if in_changes_section && line.starts_with("  ") {
+                let service_name = line.trim();
+                updates.push(PackageUpdate {
+                    name: service_name.to_string(),
+                    current_version: "current".to_string(),
+                    new_version: format!("will {}", section_name),
+                    is_aur: false,
+                });
+            }
+        }
+
+        // If no specific changes found but command succeeded and mentions building
+        if updates.is_empty() {
+            if output.contains("building") || output.contains("these") {
+                updates.push(PackageUpdate {
+                    name: "NixOS System".to_string(),
+                    current_version: "current generation".to_string(),
+                    new_version: "new generation available".to_string(),
+                    is_aur: false,
+                });
+            }
+        }
+
+        Ok(updates)
+    }
+
+    async fn check_nixos_flakes(&self, config_path: &str) -> Result<Vec<PackageUpdate>> {
+        let flake_lock_path = std::path::Path::new(config_path).join("flake.lock");
+
+        // Check if flake.lock exists
+        if !flake_lock_path.exists() {
+            return Err(anyhow!(
+                "flake.lock not found in {}. Run 'nix flake update' first.",
+                config_path
+            ));
+        }
+
+        // Read current flake.lock
+        let current_lock = tokio::fs::read_to_string(&flake_lock_path).await?;
+        let _current_json: serde_json::Value = serde_json::from_str(&current_lock)?;
+
+        // Run nix flake update --dry-run to see what would change
+        let output = TokioCommand::new("nix")
+            .args(&["flake", "update", "--dry-run"])
+            .current_dir(config_path)
+            .output()
+            .await?;
+
+        // Parse the dry-run output
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Nix flake output goes to stderr for some operations
+        let combined_output = format!("{}\n{}", stdout, stderr);
+
+        // Look for patterns indicating updates
+        self.parse_flake_update_output(&combined_output)
+    }
+
+    fn parse_flake_update_output(&self, output: &str) -> Result<Vec<PackageUpdate>> {
+        let mut updates = Vec::new();
+
+        // Regex to match various update patterns:
+        // • Updated 'input': 'old' -> 'new'
+        // • Will update 'input': 'old' -> 'new'
+        // Updated input 'name': 'old' -> 'new'
+        let update_regex = regex::Regex::new(
+            r#"(?:Updated|Will update|updating|update)\s+(?:input\s+)?'?([^'\s:]+)'?:?\s+['"]?([^'"]+)['"]?\s+(?:->|→|to)\s+['"]?([^'"]+)['"]?"#
+        ).map_err(|e| anyhow!("Failed to compile regex: {}", e))?;
+
+        for line in output.lines() {
+            if let Some(captures) = update_regex.captures(line) {
+                let input_name = captures.get(1).map(|m| m.as_str()).unwrap_or("unknown");
+                let old_rev = captures.get(2).map(|m| m.as_str()).unwrap_or("unknown");
+                let new_rev = captures.get(3).map(|m| m.as_str()).unwrap_or("unknown");
+
+                // Extract short commit hashes if present (last component after /)
+                let old_short = old_rev.split('/').last().unwrap_or(old_rev);
+                let new_short = new_rev.split('/').last().unwrap_or(new_rev);
+
+                // Truncate long hashes to 7 characters
+                let old_display = if old_short.len() > 7 && old_short.chars().all(|c| c.is_ascii_hexdigit()) {
+                    &old_short[..7]
+                } else {
+                    old_short
+                };
+
+                let new_display = if new_short.len() > 7 && new_short.chars().all(|c| c.is_ascii_hexdigit()) {
+                    &new_short[..7]
+                } else {
+                    new_short
+                };
+
+                updates.push(PackageUpdate {
+                    name: format!("flake:{}", input_name),
+                    current_version: old_display.to_string(),
+                    new_version: new_display.to_string(),
+                    is_aur: false,
+                });
+            }
+        }
+
+        // Check for "up to date" message
+        if output.contains("up to date") || output.contains("no updates") {
+            return Ok(Vec::new());
+        }
+
+        // If no updates detected but output isn't empty and doesn't say "up to date"
+        if updates.is_empty() && !output.trim().is_empty() {
+            // Check if there's mention of updates but we couldn't parse them
+            if output.contains("update") || output.contains("flake") {
+                updates.push(PackageUpdate {
+                    name: "NixOS Flake".to_string(),
+                    current_version: "check manually".to_string(),
+                    new_version: "updates may be available".to_string(),
+                    is_aur: false,
+                });
+            }
+        }
+
+        Ok(updates)
+    }
+
+    async fn check_nixos_updates(&self, config: &crate::config::NixOSConfig) -> Result<Vec<PackageUpdate>> {
+        match config.mode {
+            crate::config::NixOSMode::Channels => self.check_nixos_channels().await,
+            crate::config::NixOSMode::Flakes => self.check_nixos_flakes(&config.config_path).await,
+        }
     }
 
 }

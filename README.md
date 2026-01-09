@@ -14,6 +14,7 @@ Supports multiple Linux distributions including Arch Linux, Debian/Ubuntu, Fedor
 - **Fedora/RHEL**: DNF
 - **openSUSE/SUSE**: Zypper
 - **Alpine Linux**: APK
+- **NixOS**: Channels and Flakes support ([see NixOS guide](README-NIXOS.md))
 - **Universal**: Flatpak
 - **Auto-detection**: Automatically discovers available package managers on first launch
 
@@ -87,7 +88,7 @@ yay -S cosmic-applet-package-updater-git
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/Ebbo/cosmic-applet-package-updater.git
+   git clone https://github.com/olafkfreund/cosmic-applet-package-updater.git
    cd cosmic-applet-package-updater
    ```
 
@@ -248,6 +249,57 @@ The applet uses distribution-specific commands to detect updates:
 
 **Flatpak:**
 - `flatpak remote-ls --updates`
+
+**NixOS:**
+- **Channels Mode**: `sudo nixos-rebuild dry-activate --upgrade`
+- **Flakes Mode**: `nix flake update --dry-run`
+
+### NixOS Support
+
+The applet now fully supports NixOS with both traditional channels and modern flakes!
+
+**Supported Modes:**
+- **Channels**: Traditional NixOS update mechanism using `nix-channel`
+- **Flakes**: Modern reproducible configuration approach using `flake.nix` and `flake.lock`
+
+**Configuration:**
+1. Select "nixos" from Package Managers in Settings
+2. Choose your mode: Flakes or Channels
+3. Set your NixOS configuration path (default: `/etc/nixos`)
+4. Click "Auto-detect Mode" to automatically detect your setup based on presence of `flake.nix`
+
+**Requirements:**
+- NixOS system with `nixos-rebuild` available
+- For update checks with channels: passwordless sudo configured (see below)
+- For flakes: Valid `flake.nix` and `flake.lock` in config directory
+- For flakes mode: `nix` command with flakes support enabled
+
+**Passwordless Sudo Setup (Channels Mode):**
+
+For channels mode to check for updates without password prompts, configure passwordless sudo:
+
+Create `/etc/sudoers.d/nixos-rebuild` with:
+```
+%wheel ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/nixos-rebuild
+```
+
+Or if you're not in the wheel group:
+```
+your_username ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/nixos-rebuild
+```
+
+**How Updates Work:**
+- **Channels**: Runs `nixos-rebuild dry-activate --upgrade` to check what systemd units/services would change
+- **Flakes**: Runs `nix flake update --dry-run` to check which flake inputs have newer versions available
+
+**Update Command:**
+- **Channels**: `sudo nix-channel --update && sudo nixos-rebuild switch --upgrade`
+- **Flakes**: `cd <config_path> && nix flake update && sudo nixos-rebuild switch --flake .#`
+
+**Note on Update Display:**
+- NixOS is declarative, so instead of showing individual package updates like other distributions, the applet shows:
+  - **Channels**: System services/units that would change (start, restart, reload, stop)
+  - **Flakes**: Flake inputs that have new versions (e.g., `flake:nixpkgs abc1234 → def5678`)
 
 ### Smart Features
 

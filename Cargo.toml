@@ -2,6 +2,12 @@
 members = [ "package-updater" ]
 resolver = "2"
 
+[workspace.package]
+version = "1.0.0"
+
+[workspace.metadata.crane]
+name = "cosmic-ext-applet-package-updater"
+
 [profile.release]
 lto = "fat"
 

@@ -42,8 +42,8 @@
     <keyword>applet</keyword>
   </keywords>
 
-  <url type="homepage">https://github.com/Ebbo/cosmic-applet-package-updater</url>
-  <url type="bugtracker">https://github.com/Ebbo/cosmic-applet-package-updater/issues</url>
+  <url type="homepage">https://github.com/olafkfreund/cosmic-applet-package-updater</url>
+  <url type="bugtracker">https://github.com/olafkfreund/cosmic-applet-package-updater/issues</url>
 
   <project_license>GPL-3.0</project_license>
   <metadata_license>CC0-1.0</metadata_license>
