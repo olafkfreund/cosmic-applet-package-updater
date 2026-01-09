@@ -671,18 +671,34 @@ impl UpdateChecker {
             ));
         }
 
-        // Read current flake.lock
-        let current_lock = tokio::fs::read_to_string(&flake_lock_path).await?;
-        let _current_json: serde_json::Value = serde_json::from_str(&current_lock)?;
+        // Backup current flake.lock
+        let backup_path = std::path::Path::new(config_path).join("flake.lock.backup");
+        tokio::fs::copy(&flake_lock_path, &backup_path).await?;
 
-        // Run nix flake update --dry-run to see what would change
+        // Run nix flake update to see what would change
+        // Note: --dry-run doesn't exist, so we backup/restore instead
         let output = TokioCommand::new("nix")
-            .args(&["flake", "update", "--dry-run"])
+            .args(&["flake", "update"])
             .current_dir(config_path)
             .output()
-            .await?;
+            .await;
 
-        // Parse the dry-run output
+        // Always restore the backup, even if the command failed
+        let restore_result = tokio::fs::copy(&backup_path, &flake_lock_path).await;
+        let remove_result = tokio::fs::remove_file(&backup_path).await;
+
+        // Check if restore succeeded
+        if let Err(e) = restore_result {
+            return Err(anyhow!("Failed to restore flake.lock backup: {}", e));
+        }
+
+        // Remove backup file (ignore errors)
+        let _ = remove_result;
+
+        // Now check if the update command succeeded
+        let output = output?;
+
+        // Parse the update output
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -696,43 +712,55 @@ impl UpdateChecker {
     fn parse_flake_update_output(&self, output: &str) -> Result<Vec<PackageUpdate>> {
         let mut updates = Vec::new();
 
-        // Regex to match various update patterns:
-        // • Updated 'input': 'old' -> 'new'
-        // • Will update 'input': 'old' -> 'new'
-        // Updated input 'name': 'old' -> 'new'
-        let update_regex = regex::Regex::new(
-            r#"(?:Updated|Will update|updating|update)\s+(?:input\s+)?'?([^'\s:]+)'?:?\s+['"]?([^'"]+)['"]?\s+(?:->|→|to)\s+['"]?([^'"]+)['"]?"#
-        ).map_err(|e| anyhow!("Failed to compile regex: {}", e))?;
+        // Pattern 1: • Updated input 'name': (multi-line format)
+        // • Updated input 'nur':
+        //     'github:...' (date)
+        //   → 'github:...' (date)
+        let input_regex = regex::Regex::new(r"Updated input '([^']+)':")
+            .map_err(|e| anyhow!("Failed to compile input regex: {}", e))?;
 
-        for line in output.lines() {
-            if let Some(captures) = update_regex.captures(line) {
+        let lines: Vec<&str> = output.lines().collect();
+        let mut i = 0;
+
+        while i < lines.len() {
+            if let Some(captures) = input_regex.captures(lines[i]) {
                 let input_name = captures.get(1).map(|m| m.as_str()).unwrap_or("unknown");
-                let old_rev = captures.get(2).map(|m| m.as_str()).unwrap_or("unknown");
-                let new_rev = captures.get(3).map(|m| m.as_str()).unwrap_or("unknown");
 
-                // Extract short commit hashes if present (last component after /)
-                let old_short = old_rev.split('/').last().unwrap_or(old_rev);
-                let new_short = new_rev.split('/').last().unwrap_or(new_rev);
+                // Look for the old and new refs in the next 2 lines
+                if i + 2 < lines.len() {
+                    let old_line = lines[i + 1].trim();
+                    let new_line = lines[i + 2].trim();
 
-                // Truncate long hashes to 7 characters
-                let old_display = if old_short.len() > 7 && old_short.chars().all(|c| c.is_ascii_hexdigit()) {
-                    &old_short[..7]
-                } else {
-                    old_short
-                };
+                    // Extract revision hashes from URLs
+                    // Format: 'github:owner/repo/HASH?narHash=...' (date)
+                    let extract_hash = |line: &str| -> Option<String> {
+                        // Remove leading → or • and quotes
+                        let cleaned = line.trim_start_matches('→').trim_start_matches('•').trim().trim_matches('\'').trim_matches('"');
+                        // Look for pattern: /HASH? or /HASH (
+                        if let Some(start) = cleaned.rfind('/') {
+                            let after_slash = &cleaned[start+1..];
+                            // Find end of hash (before ? or space or ()
+                            let hash_end = after_slash.find(|c| c == '?' || c == ' ' || c == '(').unwrap_or(after_slash.len());
+                            let hash = &after_slash[..hash_end];
+                            if hash.len() >= 7 && hash.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+                                return Some(hash[..7.min(hash.len())].to_string());
+                            }
+                        }
+                        None
+                    };
 
-                let new_display = if new_short.len() > 7 && new_short.chars().all(|c| c.is_ascii_hexdigit()) {
-                    &new_short[..7]
-                } else {
-                    new_short
-                };
-
-                updates.push(PackageUpdate {
-                    name: format!("flake:{}", input_name),
-                    current_version: old_display.to_string(),
-                    new_version: new_display.to_string(),
-                    is_aur: false,
-                });
+                    if let (Some(old_hash), Some(new_hash)) = (extract_hash(old_line), extract_hash(new_line)) {
+                        updates.push(PackageUpdate {
+                            name: format!("flake:{}", input_name),
+                            current_version: old_hash,
+                            new_version: new_hash,
+                            is_aur: false,
+                        });
+                    }
+                }
+                i += 3; // Skip the input line and the two following lines
+            } else {
+                i += 1;
             }
         }
 
