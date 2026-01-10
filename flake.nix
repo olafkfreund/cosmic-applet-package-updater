@@ -28,7 +28,7 @@
         # Crane library for building Rust projects
         craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
 
-        # Source filtering - include res/ directory for resources
+        # Source filtering - include res/ directory and justfile
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
@@ -36,9 +36,11 @@
               baseName = baseNameOf (toString path);
               isRes = (type == "directory") && (baseName == "res");
               isInRes = pkgs.lib.hasInfix "/res/" path;
+              isJustfile = (type == "regular") && (baseName == "justfile");
             in
               isRes ||
               isInRes ||
+              isJustfile ||
               (craneLib.filterCargoSources path type);
         };
 
@@ -74,24 +76,9 @@
           pname = "cosmic-ext-applet-package-updater";
           version = "1.0.0";
 
-          # Install resources
-          postInstall = ''
-            mkdir -p $out/share/applications
-            mkdir -p $out/share/metainfo
-            mkdir -p $out/share/icons/hicolor
-
-            # Copy desktop file and metainfo from source
-            cp $src/res/com.github.cosmic_ext.PackageUpdater.desktop $out/share/applications/
-            cp $src/res/com.github.cosmic_ext.PackageUpdater.metainfo.xml $out/share/metainfo/
-
-            # Copy icons
-            for size in 16 24 32 48 64 128 256; do
-              if [ -d "$src/res/icons/hicolor/''${size}x''${size}/apps" ]; then
-                mkdir -p $out/share/icons/hicolor/''${size}x''${size}/apps
-                cp $src/res/icons/hicolor/''${size}x''${size}/apps/com.github.cosmic_ext.PackageUpdater.svg \
-                   $out/share/icons/hicolor/''${size}x''${size}/apps/ || true
-              fi
-            done
+          # Use justfile for installation to match COSMIC conventions
+          installPhaseCommand = ''
+            just --set prefix "$out" --set bin-src "target/release/cosmic-ext-applet-package-updater" install
           '';
 
           meta = with pkgs.lib; {
