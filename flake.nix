@@ -52,11 +52,13 @@
           nativeBuildInputs = with pkgs; [
             pkg-config
             just
+            makeWrapper
           ];
 
           buildInputs = with pkgs; [
             libxkbcommon
             wayland
+            wayland-protocols
             expat
             fontconfig
             freetype
@@ -79,6 +81,12 @@
           # Use justfile for installation to match COSMIC conventions
           installPhaseCommand = ''
             just --set prefix "$out" --set bin-src "target/release/cosmic-ext-applet-package-updater" install
+          '';
+
+          # Wrap binary to ensure Wayland libraries are found at runtime
+          postFixup = ''
+            wrapProgram $out/bin/cosmic-ext-applet-package-updater \
+              --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath [ pkgs.wayland pkgs.libxkbcommon ]}"
           '';
 
           meta = with pkgs.lib; {
