@@ -570,9 +570,9 @@ impl UpdateChecker {
     }
 
     async fn check_nixos_channels(&self) -> Result<Vec<PackageUpdate>> {
-        // Run nixos-rebuild dry-activate with upgrade flag
+        // Run nixos-rebuild dry-build with upgrade flag to show package statistics
         let output = TokioCommand::new("sudo")
-            .args(&["nixos-rebuild", "dry-activate", "--upgrade"])
+            .args(&["nixos-rebuild", "dry-build", "--upgrade"])
             .output()
             .await?;
 
@@ -601,65 +601,6 @@ impl UpdateChecker {
         self.parse_nixos_rebuild_output(&combined_output)
     }
 
-    fn parse_nixos_rebuild_output(&self, output: &str) -> Result<Vec<PackageUpdate>> {
-        let mut updates = Vec::new();
-        let mut in_changes_section = false;
-        let mut section_name = String::new();
-
-        for line in output.lines() {
-            // Detect section headers
-            if line.contains("would start the following units:") {
-                in_changes_section = true;
-                section_name = "start".to_string();
-                continue;
-            } else if line.contains("would restart the following units:") {
-                in_changes_section = true;
-                section_name = "restart".to_string();
-                continue;
-            } else if line.contains("would reload the following units:") {
-                in_changes_section = true;
-                section_name = "reload".to_string();
-                continue;
-            } else if line.contains("would stop the following units:") {
-                in_changes_section = true;
-                section_name = "stop".to_string();
-                continue;
-            }
-
-            // Empty line or new section ends current section
-            if line.trim().is_empty() || line.starts_with("would ") {
-                if in_changes_section && !line.starts_with("  ") {
-                    in_changes_section = false;
-                }
-            }
-
-            // Parse unit/service name from indented lines
-            if in_changes_section && line.starts_with("  ") {
-                let service_name = line.trim();
-                updates.push(PackageUpdate {
-                    name: service_name.to_string(),
-                    current_version: "current".to_string(),
-                    new_version: format!("will {}", section_name),
-                    is_aur: false,
-                });
-            }
-        }
-
-        // If no specific changes found but command succeeded and mentions building
-        if updates.is_empty() {
-            if output.contains("building") || output.contains("these") {
-                updates.push(PackageUpdate {
-                    name: "NixOS System".to_string(),
-                    current_version: "current generation".to_string(),
-                    new_version: "new generation available".to_string(),
-                    is_aur: false,
-                });
-            }
-        }
-
-        Ok(updates)
-    }
-
     async fn check_nixos_flakes(&self, config_path: &str) -> Result<Vec<PackageUpdate>> {
         let flake_lock_path = std::path::Path::new(config_path).join("flake.lock");
 
@@ -671,114 +612,74 @@ impl UpdateChecker {
             ));
         }
 
-        // Backup current flake.lock
-        let backup_path = std::path::Path::new(config_path).join("flake.lock.backup");
-        tokio::fs::copy(&flake_lock_path, &backup_path).await?;
-
-        // Run nix flake update to see what would change
-        // Note: --dry-run doesn't exist, so we backup/restore instead
-        let output = TokioCommand::new("nix")
-            .args(&["flake", "update"])
-            .current_dir(config_path)
+        // Run nixos-rebuild dry-build to see what would be built
+        // This shows package-level changes without actually building anything
+        let output = TokioCommand::new("nixos-rebuild")
+            .args(&["dry-build", "--flake", &format!("{}#", config_path)])
             .output()
-            .await;
+            .await?;
 
-        // Always restore the backup, even if the command failed
-        let restore_result = tokio::fs::copy(&backup_path, &flake_lock_path).await;
-        let remove_result = tokio::fs::remove_file(&backup_path).await;
-
-        // Check if restore succeeded
-        if let Err(e) = restore_result {
-            return Err(anyhow!("Failed to restore flake.lock backup: {}", e));
-        }
-
-        // Remove backup file (ignore errors)
-        let _ = remove_result;
-
-        // Now check if the update command succeeded
-        let output = output?;
-
-        // Parse the update output
+        // Parse the dry-build output for statistics
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        // Nix flake output goes to stderr for some operations
+        // Nix build output goes to stderr
         let combined_output = format!("{}\n{}", stdout, stderr);
 
-        // Look for patterns indicating updates
-        self.parse_flake_update_output(&combined_output)
+        // Parse for package statistics
+        self.parse_nixos_rebuild_output(&combined_output)
     }
 
-    fn parse_flake_update_output(&self, output: &str) -> Result<Vec<PackageUpdate>> {
+    fn parse_nixos_rebuild_output(&self, output: &str) -> Result<Vec<PackageUpdate>> {
         let mut updates = Vec::new();
 
-        // Pattern 1: • Updated input 'name': (multi-line format)
-        // • Updated input 'nur':
-        //     'github:...' (date)
-        //   → 'github:...' (date)
-        let input_regex = regex::Regex::new(r"Updated input '([^']+)':")
-            .map_err(|e| anyhow!("Failed to compile input regex: {}", e))?;
+        // Count packages that will be built
+        // Look for lines like: "these X derivations will be built:"
+        let mut packages_to_build = 0;
+        let mut packages_to_fetch = 0;
 
-        let lines: Vec<&str> = output.lines().collect();
-        let mut i = 0;
-
-        while i < lines.len() {
-            if let Some(captures) = input_regex.captures(lines[i]) {
-                let input_name = captures.get(1).map(|m| m.as_str()).unwrap_or("unknown");
-
-                // Look for the old and new refs in the next 2 lines
-                if i + 2 < lines.len() {
-                    let old_line = lines[i + 1].trim();
-                    let new_line = lines[i + 2].trim();
-
-                    // Extract revision hashes from URLs
-                    // Format: 'github:owner/repo/HASH?narHash=...' (date)
-                    let extract_hash = |line: &str| -> Option<String> {
-                        // Remove leading → or • and quotes
-                        let cleaned = line.trim_start_matches('→').trim_start_matches('•').trim().trim_matches('\'').trim_matches('"');
-                        // Look for pattern: /HASH? or /HASH (
-                        if let Some(start) = cleaned.rfind('/') {
-                            let after_slash = &cleaned[start+1..];
-                            // Find end of hash (before ? or space or ()
-                            let hash_end = after_slash.find(|c| c == '?' || c == ' ' || c == '(').unwrap_or(after_slash.len());
-                            let hash = &after_slash[..hash_end];
-                            if hash.len() >= 7 && hash.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-                                return Some(hash[..7.min(hash.len())].to_string());
-                            }
-                        }
-                        None
-                    };
-
-                    if let (Some(old_hash), Some(new_hash)) = (extract_hash(old_line), extract_hash(new_line)) {
-                        updates.push(PackageUpdate {
-                            name: format!("flake:{}", input_name),
-                            current_version: old_hash,
-                            new_version: new_hash,
-                            is_aur: false,
-                        });
+        for line in output.lines() {
+            // Match: "these 47 derivations will be built:"
+            if line.contains("derivations will be built") || line.contains("derivation will be built") {
+                if let Some(num_str) = line.split_whitespace().nth(1) {
+                    if let Ok(num) = num_str.parse::<usize>() {
+                        packages_to_build = num;
                     }
                 }
-                i += 3; // Skip the input line and the two following lines
-            } else {
-                i += 1;
+            }
+            // Match: "these 23 paths will be fetched"
+            if line.contains("paths will be fetched") || line.contains("path will be fetched") {
+                if let Some(num_str) = line.split_whitespace().nth(1) {
+                    if let Ok(num) = num_str.parse::<usize>() {
+                        packages_to_fetch = num;
+                    }
+                }
             }
         }
 
-        // Check for "up to date" message
-        if output.contains("up to date") || output.contains("no updates") {
-            return Ok(Vec::new());
-        }
-
-        // If no updates detected but output isn't empty and doesn't say "up to date"
-        if updates.is_empty() && !output.trim().is_empty() {
-            // Check if there's mention of updates but we couldn't parse them
-            if output.contains("update") || output.contains("flake") {
+        // If we found updates, create summary entries
+        if packages_to_build > 0 || packages_to_fetch > 0 {
+            if packages_to_build > 0 {
                 updates.push(PackageUpdate {
-                    name: "NixOS Flake".to_string(),
-                    current_version: "check manually".to_string(),
-                    new_version: "updates may be available".to_string(),
+                    name: "System Update".to_string(),
+                    current_version: format!("{} packages", packages_to_build),
+                    new_version: "will be built".to_string(),
                     is_aur: false,
                 });
+            }
+
+            if packages_to_fetch > 0 {
+                updates.push(PackageUpdate {
+                    name: "Downloads".to_string(),
+                    current_version: format!("{} packages", packages_to_fetch),
+                    new_version: "will be fetched".to_string(),
+                    is_aur: false,
+                });
+            }
+        } else {
+            // Check if system is up to date
+            if output.contains("up to date") || output.contains("already built") {
+                return Ok(Vec::new());
             }
         }
 
