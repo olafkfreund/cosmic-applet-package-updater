@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: cosmic-applet-package-updater
+          authToken: '${{ secrets.CACHIX_KEY }}'
+          pushFilter: "(-source$|-sys$)"
+
+      - name: Check Nix flake metadata
+        run: nix flake check --print-build-logs
+
+      - name: Build NixOS package
+        run: nix build .#default --print-build-logs
+
+      - name: Run Clippy checks
+        run: nix build .#checks.x86_64-linux.clippy --print-build-logs
+
+      - name: Run Format checks
+        run: nix build .#checks.x86_64-linux.fmt --print-build-logs
+
+      - name: Verify package check
+        run: nix build .#checks.x86_64-linux.package --print-build-logs
