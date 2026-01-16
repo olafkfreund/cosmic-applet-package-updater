@@ -193,6 +193,115 @@ yay -S cosmic-applet-package-updater-git
 
 **AUR Package**: [cosmic-applet-package-updater-git](https://aur.archlinux.org/packages/cosmic-applet-package-updater-git)
 
+### NixOS Installation (Recommended for NixOS users)
+
+#### Quick Install with Cachix
+
+For the fastest installation using pre-built binaries from Cachix:
+
+```bash
+# Add the Cachix binary cache
+cachix use cosmic-applet-package-updater
+
+# Install directly from GitHub
+nix profile install github:olafkfreund/cosmic-applet-package-updater
+```
+
+#### NixOS Configuration
+
+Add to your NixOS configuration to enable the binary cache and install the applet:
+
+```nix
+{ config, pkgs, ... }:
+
+{
+  # Enable Cachix binary cache for faster installations
+  nix.settings = {
+    substituters = [
+      "https://cache.nixos.org"
+      "https://cosmic-applet-package-updater.cachix.org"
+    ];
+    trusted-public-keys = [
+      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+      "cosmic-applet-package-updater.cachix.org-1:your-public-key-here"
+    ];
+  };
+
+  # Install the applet
+  environment.systemPackages = [
+    (pkgs.callPackage (builtins.fetchGit {
+      url = "https://github.com/olafkfreund/cosmic-applet-package-updater";
+      ref = "master";
+    }) {})
+  ];
+}
+```
+
+**Alternative: Using Flakes in NixOS configuration**
+
+```nix
+{
+  description = "NixOS configuration with COSMIC Package Updater";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    cosmic-applet-package-updater.url = "github:olafkfreund/cosmic-applet-package-updater";
+  };
+
+  outputs = { self, nixpkgs, cosmic-applet-package-updater, ... }: {
+    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        {
+          # Enable Cachix cache
+          nix.settings = {
+            substituters = [
+              "https://cache.nixos.org"
+              "https://cosmic-applet-package-updater.cachix.org"
+            ];
+            trusted-public-keys = [
+              "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+              "cosmic-applet-package-updater.cachix.org-1:your-public-key-here"
+            ];
+          };
+
+          # Install the applet
+          environment.systemPackages = [
+            cosmic-applet-package-updater.packages.x86_64-linux.default
+          ];
+        }
+      ];
+    };
+  };
+}
+```
+
+**Benefits of using Cachix:**
+- ⚡ **Fast installations**: Pre-built binaries, no compilation needed
+- 🔄 **Automatic updates**: Same binaries used in CI/CD
+- 💾 **Reduced disk usage**: Shared dependencies across packages
+- 🌐 **CDN distribution**: Fast downloads from anywhere
+
+#### Home Manager Configuration
+
+If you use Home Manager, add to your `home.nix`:
+
+```nix
+{ config, pkgs, ... }:
+
+{
+  home.packages = [
+    (pkgs.callPackage (builtins.fetchGit {
+      url = "https://github.com/olafkfreund/cosmic-applet-package-updater";
+      ref = "master";
+    }) {})
+  ];
+}
+```
+
+**Note**: Get the actual Cachix public key by running `cachix use cosmic-applet-package-updater` or from the Cachix dashboard at https://app.cachix.org/cache/cosmic-applet-package-updater
+
 ### Build from Source
 
 1. **Clone the repository**:
