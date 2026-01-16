@@ -347,3 +347,514 @@ Execute appropriate command → Parse output → Return Vec<PackageUpdate>
 - **NixOS channels need sudo** - ensure clear error messages guide users to configure passwordless sudo
 - **NixOS is declarative** - updates are shown as "generation changes" not individual packages
 - **Flake.lock must exist** - validate file existence before attempting flakes update check
+
+---
+
+## Security Patterns (Added 2026-01-16)
+
+### Command Injection Prevention
+
+**Always use `shell-escape` for user-influenced paths:**
+
+```rust
+use shell_escape::escape;
+
+let marker_file = format!("{}/file-{}.marker", runtime_dir, pid);
+let escaped_marker = shell_escape::escape(marker_file.into());
+
+// Safe: marker file path is properly escaped
+let command = format!(
+    "{} && echo 'Done' && read; rm -f {}",
+    update_command,
+    escaped_marker
+);
+```
+
+**❌ Don't do:**
+```rust
+// UNSAFE: No escaping, vulnerable to injection
+let command = format!(
+    "{} && echo \"Done\" && read; rm -f \"{}\"",
+    update_command,
+    marker_file  // ⚠️ Not escaped!
+);
+```
+
+### File Locking Best Practices
+
+**Use atomic `flock` for inter-process coordination:**
+
+```rust
+use nix::fcntl::{flock, FlockArg};
+use std::os::unix::io::AsRawFd;
+
+async fn acquire_lock() -> Result<File> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&lock_path)?;
+
+    // Atomic non-blocking exclusive lock
+    match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
+        Ok(()) => Ok(file),
+        Err(nix::errno::Errno::EWOULDBLOCK) => {
+            Err(anyhow!("Another instance is running"))
+        }
+        Err(e) => Err(anyhow!("Lock failed: {}", e))
+    }
+}
+```
+
+**❌ Don't do:**
+```rust
+// UNSAFE: Race condition - not atomic!
+match OpenOptions::new()
+    .write(true)
+    .create(true)
+    .truncate(true)  // ⚠️ Multiple processes can pass this check
+    .open(&lock_path)
+{
+    Ok(file) => { /* Lock "acquired" */ }
+    Err(_) => { /* Someone else has it? */ }
+}
+```
+
+### Pre-flight Sudo Checks
+
+**Test for passwordless sudo before attempting privileged operations:**
+
+```rust
+async fn check_passwordless_sudo() -> Result<bool> {
+    let output = TokioCommand::new("sudo")
+        .args(&["-n", "true"])  // -n = non-interactive
+        .output()
+        .await?;
+    Ok(output.status.success())
+}
+
+async fn run_privileged_command() -> Result<()> {
+    if !check_passwordless_sudo().await? {
+        return Err(anyhow!(
+            "Passwordless sudo required. Configure:\n\
+             %wheel ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/nixos-rebuild"
+        ));
+    }
+    // Safe to proceed
+}
+```
+
+### Path Validation for Executables
+
+**Only execute binaries from trusted system directories:**
+
+```rust
+fn is_safe_executable_path(path: &str) -> bool {
+    path.starts_with("/usr/") ||
+    path.starts_with("/bin/") ||
+    path.starts_with("/sbin/") ||
+    path.starts_with("/nix/store/") ||
+    path.starts_with("/run/current-system/") ||
+    path.starts_with("/opt/")
+}
+
+fn validate_package_manager(pm_name: &str) -> Result<String> {
+    let output = Command::new("which").arg(pm_name).output()?;
+    if !output.status.success() {
+        return Err(anyhow!("Package manager not found"));
+    }
+
+    let path = String::from_utf8_lossy(&output.stdout);
+    let path = path.trim();
+
+    if !is_safe_executable_path(path) {
+        return Err(anyhow!(
+            "Package manager in unsafe location: {}",
+            path
+        ));
+    }
+
+    Ok(path.to_string())
+}
+```
+
+### Error Handling Patterns
+
+**Always log errors, even when using fallbacks:**
+
+```rust
+// ✅ Good: Error is logged before fallback
+let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+    .unwrap_or_else(|e| {
+        eprintln!("Warning: XDG_RUNTIME_DIR not set: {}. Using /tmp", e);
+        "/tmp".to_string()
+    });
+
+// ✅ Good: Error is reported
+if let Err(e) = std::fs::File::create(&marker_file) {
+    eprintln!("Warning: Failed to create marker file: {}", e);
+}
+
+// ❌ Bad: Silent failure
+let _ = std::fs::File::create(&marker_file);
+```
+
+---
+
+## Testing Patterns (Added 2026-01-16)
+
+### Unit Test Structure
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_package_line_with_version() {
+        let checker = UpdateChecker::new(PackageManager::Pacman);
+        let line = "linux 6.1.0-1 -> 6.2.0-1";
+        let update = checker.parse_package_line(line, false).unwrap();
+
+        assert_eq!(update.name, "linux");
+        assert_eq!(update.current_version, "6.1.0-1");
+        assert_eq!(update.new_version, "6.2.0-1");
+        assert!(!update.is_aur);
+    }
+
+    #[test]
+    fn test_parse_package_line_without_version() {
+        let checker = UpdateChecker::new(PackageManager::Pacman);
+        let line = "firefox 120.0-1";
+        let update = checker.parse_package_line(line, false).unwrap();
+
+        assert_eq!(update.name, "firefox");
+        assert_eq!(update.current_version, "unknown");
+        assert_eq!(update.new_version, "120.0-1");
+    }
+
+    #[test]
+    fn test_skip_header_lines() {
+        let checker = UpdateChecker::new(PackageManager::Apt);
+        assert!(checker.parse_package_line("Listing...", false).is_none());
+        assert!(checker.parse_package_line("Done", false).is_none());
+        assert!(checker.parse_package_line("WARNING: test", false).is_none());
+    }
+}
+```
+
+### Testing File Operations
+
+```rust
+#[test]
+fn test_nixos_mode_detection() {
+    use std::fs;
+    use std::io::Write;
+
+    // Create temporary directory for test
+    let temp_dir = std::env::temp_dir().join(format!("test-{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    // Test Channels mode (no flake.nix)
+    let mode = PackageManagerDetector::detect_nixos_mode(temp_dir.to_str().unwrap());
+    assert_eq!(mode, NixOSMode::Channels);
+
+    // Test Flakes mode (with flake.nix)
+    let flake_path = temp_dir.join("flake.nix");
+    let mut file = fs::File::create(&flake_path).unwrap();
+    writeln!(file, "{{}}").unwrap();
+
+    let mode = PackageManagerDetector::detect_nixos_mode(temp_dir.to_str().unwrap());
+    assert_eq!(mode, NixOSMode::Flakes);
+
+    // Cleanup
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+cd package-updater && cargo test
+
+# Run specific test
+cargo test test_parse_arch_package_line
+
+# Run tests with output
+cargo test -- --nocapture
+
+# Run tests with logging
+RUST_LOG=debug cargo test -- --nocapture
+```
+
+---
+
+## Code Quality Standards
+
+### Constants Over Magic Numbers
+
+**Always define constants for repeated values:**
+
+```rust
+// Timing constants
+const STARTUP_DELAY_SECS: u64 = 2;
+const POST_UPDATE_STABILIZATION_SECS: u64 = 3;
+const SYNC_DEBOUNCE_SECS: u64 = 10;
+const MARKER_FILE_POLL_INTERVAL_MS: u64 = 500;
+const LOCK_RETRY_DELAY_SECS: u64 = 2;
+
+// UI dimension constants
+const POPUP_MIN_HEIGHT: f32 = 350.0;
+const POPUP_MAX_HEIGHT: f32 = 800.0;
+const POPUP_MIN_WIDTH: f32 = 450.0;
+const POPUP_MAX_WIDTH: f32 = 550.0;
+const PACKAGE_LIST_HEIGHT: f32 = 100.0;
+```
+
+### Regex Compilation
+
+**Use `once_cell::Lazy` for expensive regex compilation:**
+
+```rust
+use once_cell::sync::Lazy;
+use regex::Regex;
+
+static FLAKE_UPDATE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:Updated|updated)\s+input\s+['\"]?([^'\s:]+)").unwrap()
+});
+
+fn parse_flake_updates(output: &str) -> Vec<Update> {
+    FLAKE_UPDATE_REGEX.captures_iter(output)
+        .map(|cap| /* process match */)
+        .collect()
+}
+```
+
+### UI Method Decomposition
+
+**Break large UI methods into focused helpers:**
+
+```rust
+// ❌ Bad: 150-line monolithic method
+fn view_updates_tab(&self) -> Element<'_, Message> {
+    let mut widgets = vec![];
+    // ... 150 lines of UI code ...
+    column().extend(widgets).into()
+}
+
+// ✅ Good: Decomposed into focused methods
+fn view_updates_tab(&self) -> Element<'_, Message> {
+    let mut widgets = vec![];
+    widgets.extend(self.build_status_section());
+    widgets.extend(self.build_action_buttons());
+    if self.update_info.has_updates() {
+        widgets.extend(self.build_package_list());
+    }
+    column().extend(widgets).into()
+}
+
+fn build_status_section(&self) -> Vec<Element<'_, Message>> {
+    // Focused on status display
+}
+
+fn build_action_buttons(&self) -> Vec<Element<'_, Message>> {
+    // Focused on button creation
+}
+
+fn build_package_list(&self) -> Vec<Element<'_, Message>> {
+    // Focused on package list rendering
+}
+```
+
+### Documentation Standards
+
+**Document all public items with examples:**
+
+```rust
+/// Manages package update checking across multiple Linux distributions.
+///
+/// Handles the execution of package manager commands, parsing their output,
+/// and managing concurrent access through file-based locking.
+///
+/// # Supported Package Managers
+///
+/// - **Arch Linux**: pacman, paru, yay (with AUR support)
+/// - **Debian/Ubuntu**: apt
+/// - **Fedora/RHEL**: dnf
+/// - **openSUSE**: zypper
+/// - **Alpine**: apk
+/// - **NixOS**: channels and flakes modes
+/// - **Universal**: flatpak
+///
+/// # Examples
+///
+/// ```rust
+/// let checker = UpdateChecker::new(PackageManager::Pacman);
+/// let updates = checker.check_updates(false, &nixos_config).await?;
+/// println!("Found {} updates", updates.total_updates);
+/// ```
+pub struct UpdateChecker {
+    package_manager: PackageManager,
+}
+```
+
+---
+
+## Performance Considerations
+
+### Async Best Practices
+
+- Use `tokio::process::Command` for all external commands
+- Avoid blocking in async contexts
+- Use non-blocking locks (`FlockArg::LockExclusiveNonblock`)
+- Poll with reasonable intervals (500ms for file checks)
+
+### Memory Efficiency
+
+- Use `&str` instead of `String` for static strings
+- Return `&'static str` for icon names
+- Use iterators instead of collecting when possible
+- Lazy-compile regexes with `once_cell::Lazy`
+
+### UI Rendering
+
+- Keep package lists under 50 items for smooth scrolling
+- Use fixed heights to prevent layout thrashing
+- Cache formatted strings when possible
+- Avoid rebuilding entire UI on every update
+
+---
+
+## PolicyKit Integration (v1.2.0+)
+
+### Overview
+
+The applet now includes PolicyKit support for secure privilege escalation, eliminating the need for passwordless sudo configuration.
+
+### Usage Pattern
+
+```rust
+use crate::polkit;
+
+// Execute privileged command with PolicyKit
+match polkit::execute_privileged(
+    "nixos-rebuild",
+    &["switch", "--upgrade"],
+    polkit::POLKIT_ACTION_UPDATE,
+    "Authentication required to update system",
+).await {
+    Ok(output) => // Handle success,
+    Err(e) => // Fallback to sudo or show error
+}
+```
+
+### Fallback Strategy
+
+The applet automatically:
+1. Checks if PolicyKit is available (`PolkitAuth::is_available()`)
+2. Attempts PolicyKit authorization if available
+3. Falls back to sudo with appropriate checks if PolicyKit unavailable
+4. Shows helpful error messages guiding users to proper setup
+
+### Adding New Actions
+
+1. **Define action in policy file** (`policy/com.github.cosmic-ext.package-updater.policy`):
+   ```xml
+   <action id="com.github.cosmic-ext.package-updater.my-action">
+     <description>My action description</description>
+     <message>Authentication required for my action</message>
+     <defaults>
+       <allow_active>auth_admin_keep</allow_active>
+     </defaults>
+   </action>
+   ```
+
+2. **Add constant in polkit.rs**:
+   ```rust
+   pub const POLKIT_ACTION_MY_ACTION: &str = "com.github.cosmic-ext.package-updater.my-action";
+   ```
+
+3. **Use in code**:
+   ```rust
+   polkit::execute_privileged(
+       "command",
+       &["args"],
+       polkit::POLKIT_ACTION_MY_ACTION,
+       "User message",
+   ).await?;
+   ```
+
+### Testing
+
+PolicyKit functionality can be tested with:
+```bash
+# Test availability
+cd package-updater && cargo test polkit
+
+# Manual verification
+pkexec echo "PolicyKit working"
+```
+
+### Benefits
+
+- **Security**: Fine-grained per-action permissions
+- **UX**: Graphical authentication dialogs
+- **Audit**: Complete trail in system logs
+- **Fallback**: Graceful degradation to sudo
+
+See `POLKIT.md` for complete documentation.
+
+---
+
+## Integration Testing (v1.2.0+)
+
+### Lock Mechanism Tests
+
+7 comprehensive integration tests verify file locking behavior:
+
+```bash
+cd package-updater
+cargo test test_lock              # Run all lock tests
+cargo test test_concurrent_lock   # Test specific scenario
+```
+
+### Test Coverage
+
+- Lock acquisition and automatic release
+- Concurrent access prevention
+- Retry logic with async operations
+- PID tracking in lock files
+- Sync file notifications
+- Sequential lock operations
+- XDG_RUNTIME_DIR handling
+
+### Writing Integration Tests
+
+Use `#[tokio::test]` for async tests:
+
+```rust
+#[tokio::test]
+async fn test_my_async_feature() {
+    let result = my_async_function().await;
+    assert!(result.is_ok());
+}
+```
+
+---
+
+## Recent Improvements
+
+### Version 1.2.0 (2026-01-16)
+- PolicyKit integration for privilege escalation
+- 7 integration tests for lock mechanism
+- Automatic fallback to sudo when PolicyKit unavailable
+- Enhanced error messages with setup guidance
+- Complete PolicyKit documentation in POLKIT.md
+
+### Version 1.1.0 (2026-01-16)
+See `CHANGES.md` for complete details on:
+- Security vulnerability fixes
+- Comprehensive test suite addition
+- Code quality improvements
+- Performance optimizations
+- Documentation enhancements

@@ -25,6 +25,9 @@ metainfo-dst := clean(rootdir / prefix) / 'share' / 'metainfo' / metainfo
 icons-src := 'res' / 'icons' / 'hicolor'
 icons-dst := clean(rootdir / prefix) / 'share' / 'icons' / 'hicolor'
 
+polkit-policy-src := 'policy' / 'com.github.cosmic-ext.package-updater.policy'
+polkit-policy-dst := clean(rootdir / prefix) / 'share' / 'polkit-1' / 'actions' / 'com.github.cosmic-ext.package-updater.policy'
+
 # Default recipe which runs `just build-release`
 default: build-release
 
@@ -61,6 +64,7 @@ install:
     install -Dm0755 {{bin-src}} {{bin-dst}}
     install -Dm0644 {{desktop-src}} {{desktop-dst}}
     install -Dm0644 {{metainfo-src}} {{metainfo-dst}}
+    install -Dm0644 {{polkit-policy-src}} {{polkit-policy-dst}}
     for size in `ls {{icons-src}}`; do \
         install -Dm0644 "{{icons-src}}/$size/apps/{{APPID}}.svg" "{{icons-dst}}/$size/apps/{{APPID}}.svg"; \
     done
@@ -79,6 +83,7 @@ uninstall:
     rm {{bin-dst}}
     rm {{desktop-dst}}
     rm {{metainfo-dst}}
+    rm {{polkit-policy-dst}}
     for size in `ls {{icons-src}}`; do \
         rm "{{icons-dst}}/$size/apps/{{APPID}}.svg"; \
     done

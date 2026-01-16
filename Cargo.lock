@@ -1063,11 +1063,14 @@ dependencies = [
  "cosmic-config 0.1.0 (git+https://github.com/pop-os/libcosmic.git?rev=52b802a)",
  "futures",
  "libcosmic",
+ "nix 0.29.0",
  "notify",
+ "once_cell",
  "rand 0.8.5",
  "regex",
  "serde",
  "serde_json",
+ "shell-escape",
  "tokio",
  "toml",
  "zbus 5.7.1",
@@ -3076,6 +3079,18 @@ dependencies = [
 
 [[package]]
 name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.9.1",
+ "cfg-if",
+ "cfg_aliases 0.2.1",
+ "libc",
+]
+
+[[package]]
+name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
@@ -4276,6 +4291,12 @@ dependencies = [
  "cpufeatures",
  "digest",
 ]
+
+[[package]]
+name = "shell-escape"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45bb67a18fa91266cc7807181f62f9178a6873bfad7dc788c42e6430db40184f"
 
 [[package]]
 name = "shlex"

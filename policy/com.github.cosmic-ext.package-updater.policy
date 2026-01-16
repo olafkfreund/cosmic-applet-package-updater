@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+
+<!--
+  PolicyKit policy for COSMIC Package Updater Applet
+
+  This policy allows the applet to check for and install system updates
+  with proper user authentication through PolicyKit dialogs.
+-->
+
+<policyconfig>
+  <vendor>COSMIC Extensions</vendor>
+  <vendor_url>https://github.com/cosmic-ext</vendor_url>
+  <icon_name>system-software-update</icon_name>
+
+  <!-- Action: Check for package updates -->
+  <action id="com.github.cosmic-ext.package-updater.check">
+    <description>Check for package updates</description>
+    <message>Authentication is required to check for package updates</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/nixos-rebuild</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <!-- Action: Install package updates -->
+  <action id="com.github.cosmic-ext.package-updater.update">
+    <description>Install package updates</description>
+    <message>Authentication is required to install package updates</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/nixos-rebuild</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <!-- Action: Update NixOS channels -->
+  <action id="com.github.cosmic-ext.package-updater.update-channels">
+    <description>Update NixOS channels</description>
+    <message>Authentication is required to update system channels</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/nix/var/nix/profiles/per-user/root/channels/nixos</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <!-- Action: Update NixOS flakes -->
+  <action id="com.github.cosmic-ext.package-updater.update-flakes">
+    <description>Update NixOS flake inputs</description>
+    <message>Authentication is required to update flake inputs</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/run/current-system/sw/bin/nix</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>
