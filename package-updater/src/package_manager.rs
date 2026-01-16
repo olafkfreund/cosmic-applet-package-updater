@@ -848,7 +848,7 @@ impl UpdateChecker {
         let mut all_updates = Vec::new();
 
         // First, check for flake input updates using nix flake metadata
-        let metadata_output = TokioCommand::new("nix")
+        let _metadata_output = TokioCommand::new("nix")
             .args(&["flake", "metadata", "--json", config_path])
             .output()
             .await;

@@ -28,8 +28,9 @@
 ///         row![text(&package.name)]
 ///     });
 /// ```
-use cosmic::iced::{Element, Length};
+use cosmic::iced::Length;
 use cosmic::widget::{column, container, scrollable, text};
+use cosmic::Element;
 use std::marker::PhantomData;
 
 /// Number of items to render above/below visible area
@@ -248,7 +249,7 @@ where
     }
 }
 
-impl<'a, T, Message> Default for VirtualizedList<'a, T, Message> {
+impl<'a, T, Message: 'a> Default for VirtualizedList<'a, T, Message> {
     fn default() -> Self {
         Self::new()
     }
