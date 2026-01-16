@@ -1,24 +1,90 @@
-name: CI
+name: "CI"
 
 on:
   push:
     branches:
       - master
       - main
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
   pull_request:
     branches:
       - master
       - main
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  nix-build:
+    name: Build on x86_64-linux
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v27
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+            keep-outputs = true
+            keep-derivations = true
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: cosmic-applet-package-updater
+          authToken: ${{ secrets.CACHIX_KEY }}
+          # Push to cachix on master/main branch only
+          skipPush: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
+
+      - name: Show Nix version
+        run: nix --version
+
+      - name: Show flake metadata
+        run: nix flake metadata
+
+      - name: Build package
+        run: |
+          echo "Building cosmic-ext-applet-package-updater"
+          nix build .#cosmic-ext-applet-package-updater --print-build-logs --show-trace
+
+      - name: Show package info
+        run: |
+          nix path-info .#cosmic-ext-applet-package-updater
+          ls -lh result/bin/ || true
+
+      - name: Run clippy checks
+        run: |
+          echo "Running clippy checks"
+          nix build .#checks.x86_64-linux.clippy --print-build-logs --show-trace
+
+      - name: Check formatting
+        run: |
+          echo "Checking code formatting"
+          nix build .#checks.x86_64-linux.fmt --print-build-logs --show-trace
+
+  nix-flake-check:
+    name: Nix Flake Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
@@ -28,20 +94,69 @@ jobs:
         uses: cachix/cachix-action@v15
         with:
           name: cosmic-applet-package-updater
-          authToken: '${{ secrets.CACHIX_KEY }}'
-          pushFilter: "(-source$|-sys$)"
+          authToken: ${{ secrets.CACHIX_KEY }}
+          skipPush: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
 
-      - name: Check Nix flake metadata
-        run: nix flake check --print-build-logs
+      - name: Run flake check
+        run: |
+          echo "Running nix flake check"
+          nix flake check --print-build-logs --show-trace
 
-      - name: Build NixOS package
-        run: nix build .#default --print-build-logs
+  build-dev-shell:
+    name: Build Dev Shell
+    runs-on: ubuntu-latest
 
-      - name: Run Clippy checks
-        run: nix build .#checks.x86_64-linux.clippy --print-build-logs
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Run Format checks
-        run: nix build .#checks.x86_64-linux.fmt --print-build-logs
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
 
-      - name: Verify package check
-        run: nix build .#checks.x86_64-linux.package --print-build-logs
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: cosmic-applet-package-updater
+          authToken: ${{ secrets.CACHIX_KEY }}
+          skipPush: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
+
+      - name: Build development shell
+        run: |
+          echo "Building development shell"
+          nix develop --print-build-logs --command echo "Dev shell built successfully"
+
+      - name: Verify dev tools
+        run: |
+          echo "Verifying development tools"
+          nix develop --command bash -c "
+            echo 'Rust version:' && rustc --version
+            echo 'Cargo version:' && cargo --version
+            echo 'Clippy version:' && cargo clippy --version
+            echo 'Rustfmt version:' && cargo fmt --version
+          "
+
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [nix-build, nix-flake-check, build-dev-shell]
+    if: always()
+
+    steps:
+      - name: Check job results
+        run: |
+          echo "Build status: ${{ needs.nix-build.result }}"
+          echo "Flake check status: ${{ needs.nix-flake-check.result }}"
+          echo "Dev shell status: ${{ needs.build-dev-shell.result }}"
+
+          if [ "${{ needs.nix-build.result }}" != "success" ] || \
+             [ "${{ needs.nix-flake-check.result }}" != "success" ] || \
+             [ "${{ needs.build-dev-shell.result }}" != "success" ]; then
+            echo "❌ CI pipeline failed"
+            exit 1
+          else
+            echo "✅ CI pipeline passed"
+          fi

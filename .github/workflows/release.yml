@@ -1,44 +1,239 @@
-name: Release
+name: "Release"
 
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g., v1.0.0)"
+        required: true
+        type: string
 
 jobs:
-  release:
+  build-release:
+    name: Build Release for x86_64-linux
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v27
+        uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
             accept-flake-config = true
+            keep-outputs = true
+            keep-derivations = true
 
       - name: Setup Cachix
         uses: cachix/cachix-action@v15
         with:
           name: cosmic-applet-package-updater
-          authToken: '${{ secrets.CACHIX_KEY }}'
-          pushFilter: "(-source$|-sys$)"
+          authToken: ${{ secrets.CACHIX_KEY }}
+          # Always push release builds to cachix
+          skipPush: false
+
+      - name: Get version info
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
 
       - name: Build release package
-        run: nix build .#default --print-build-logs
+        run: |
+          echo "Building release for x86_64-linux"
+          nix build .#cosmic-ext-applet-package-updater \
+            --print-build-logs \
+            --show-trace \
+            --log-format bar-with-logs
 
-      - name: Get tag version
-        id: tag
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      - name: Verify build output
+        run: |
+          echo "Build completed successfully!"
+          echo "Package path: $(nix path-info .#cosmic-ext-applet-package-updater)"
+          echo "Binary location:"
+          ls -lh result/bin/
+          echo ""
+          echo "Package info:"
+          file result/bin/cosmic-ext-applet-package-updater
+          echo ""
+          echo "Installed files:"
+          find result/ -type f | head -20
+
+      - name: Run all checks
+        run: |
+          echo "Running all checks for release"
+          nix flake check --print-build-logs --show-trace
+
+      - name: Generate build metadata
+        run: |
+          mkdir -p dist
+          cat > dist/build-info-x86_64-linux.txt <<EOF
+          Build Information
+          ==================
+          Version: ${{ steps.version.outputs.version }}
+          System: x86_64-linux
+          Commit: ${{ github.sha }}
+          Built: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          Nix Store Path:
+          $(nix path-info .#cosmic-ext-applet-package-updater)
+
+          Package Files:
+          $(find result/ -type f)
+          EOF
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosmic-applet-package-updater-${{ steps.version.outputs.version }}-x86_64-linux
+          path: |
+            result/
+            dist/build-info-x86_64-linux.txt
+          retention-days: 90
+
+  create-github-release:
+    name: Create GitHub Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          # COSMIC Package Updater Applet ${{ steps.version.outputs.version }}
+
+          A lightweight and efficient package update notifier applet for the COSMIC™ desktop.
+
+          ## Installation via Nix
+
+          ### Using Cachix (Recommended)
+
+          ```bash
+          # Add the binary cache
+          cachix use cosmic-applet-package-updater
+
+          # Install from the cache
+          nix profile install github:olafkfreund/cosmic-applet-package-updater/${{ steps.version.outputs.version }}
+          ```
+
+          ### Building from Source
+
+          ```bash
+          # Using nix flakes
+          nix build github:olafkfreund/cosmic-applet-package-updater/${{ steps.version.outputs.version }}
+
+          # Install to profile
+          nix profile install github:olafkfreund/cosmic-applet-package-updater/${{ steps.version.outputs.version }}
+          ```
+
+          ### NixOS Configuration
+
+          Add to your `flake.nix`:
+
+          ```nix
+          {
+            inputs.cosmic-applet-package-updater.url = "github:olafkfreund/cosmic-applet-package-updater/${{ steps.version.outputs.version }}";
+
+            outputs = { self, nixpkgs, cosmic-applet-package-updater, ... }: {
+              nixosConfigurations.yourHost = nixpkgs.lib.nixosSystem {
+                modules = [
+                  {
+                    environment.systemPackages = [
+                      cosmic-applet-package-updater.packages.x86_64-linux.default
+                    ];
+                  }
+                ];
+              };
+            };
+          }
+          ```
+
+          ## What's New
+
+          See [CHANGES.md](CHANGES.md) for detailed changes.
+
+          ## Supported Platforms
+
+          - ✅ x86_64-linux (Intel/AMD 64-bit)
+
+          ## Binary Cache
+
+          All builds are available in the Cachix binary cache at:
+          `https://cosmic-applet-package-updater.cachix.org`
+
+          This significantly speeds up installation by avoiding local compilation.
+
+          ## Features
+
+          - Multi-distribution support (Arch, Debian/Ubuntu, Fedora, openSUSE, Alpine, NixOS, Flatpak)
+          - Real-time update notifications
+          - Automatic update checking
+          - One-click system updates
+          - PolicyKit integration for secure privilege escalation
+          - NixOS Flakes and Channels support
+
+          See the [README](README.md) for complete documentation.
+          EOF
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          name: Release ${{ steps.tag.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body_path: release-notes.md
           draft: false
           prerelease: false
-          generate_release_notes: true
+          files: |
+            artifacts/**/*.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-summary:
+    name: Release Summary
+    needs: [build-release, create-github-release]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check release status
+        run: |
+          echo "Build status: ${{ needs.build-release.result }}"
+          echo "Release status: ${{ needs.create-github-release.result }}"
+
+          if [ "${{ needs.build-release.result }}" != "success" ]; then
+            echo "❌ Release build failed"
+            exit 1
+          fi
+
+          echo "✅ Release pipeline completed"
+          echo ""
+          echo "📦 Builds are cached in Cachix: https://cosmic-applet-package-updater.cachix.org"
+          echo "🔗 GitHub Release: ${{ github.server_url }}/${{ github.repository }}/releases/latest"

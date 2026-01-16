@@ -1,92 +1,106 @@
 # GitHub Actions Workflows
 
-This directory contains CI/CD workflows for the COSMIC Package Updater Applet.
+Improved CI/CD workflows based on working patterns from cosmic-applet-music-player.
 
 ## Workflows
 
 ### `ci.yml` - Continuous Integration
 
-Runs on every push and pull request to `master`/`main` branches.
+**Triggers:**
+- Push to `master`/`main` branches
+- Pull requests to `master`/`main`
+- Manual workflow dispatch
+- Ignores documentation and metadata files
 
-**Steps:**
-1. Installs Nix with flakes support
-2. Configures Cachix binary cache
-3. Checks flake metadata
-4. Builds the NixOS package
-5. Runs Clippy linting checks
-6. Runs format checks
-7. Verifies package builds correctly
+**Jobs:**
 
-**Cachix Integration:**
-- Built artifacts are automatically pushed to Cachix
-- Uses `CACHIX_KEY` secret for authentication
-- Filters out source and system packages (`-source$|-sys$`)
+1. **nix-build** - Main build and checks
+   - Builds the package for x86_64-linux
+   - Runs clippy checks separately
+   - Runs format checks separately
+   - Uses `--show-trace` for better debugging
+
+2. **nix-flake-check** - Flake validation
+   - Validates flake.nix syntax and structure
+   - Runs all checks defined in the flake
+
+3. **build-dev-shell** - Development environment
+   - Builds the development shell
+   - Verifies development tools are available
+
+4. **summary** - CI summary
+   - Aggregates results from all jobs
+   - Provides clear pass/fail status
+
+**Key Features:**
+- ✅ Concurrency control (cancels duplicate runs)
+- ✅ Only pushes to Cachix on master/main branch
+- ✅ Separate jobs for better parallelization
+- ✅ Uses install-nix-action@v31 (latest stable)
+- ✅ Better error reporting with --show-trace
 
 ### `release.yml` - Release Automation
 
-Runs when a version tag (e.g., `v1.2.0`) is pushed.
+**Triggers:**
+- Push of version tags (v*.*.*)
+- Manual workflow dispatch with tag input
 
-**Steps:**
-1. Installs Nix with flakes support
-2. Configures Cachix binary cache
-3. Builds the release package
-4. Creates GitHub Release with auto-generated notes
-5. Pushes release artifacts to Cachix
+**Jobs:**
 
-## Setup
+1. **build-release** - Release build
+   - Builds release package for x86_64-linux
+   - Runs all checks
+   - Generates build metadata
+   - Uploads artifacts for 90 days
+   - Always pushes to Cachix
 
-### Cachix Configuration
+2. **create-github-release** - GitHub release
+   - Creates GitHub release with notes
+   - Includes installation instructions
+   - Attaches build metadata
 
-1. **Create a Cachix cache** at [cachix.org](https://cachix.org):
-   ```bash
-   cachix create cosmic-applet-package-updater
-   ```
+3. **release-summary** - Release summary
+   - Aggregates release status
+   - Provides links to release and Cachix
 
-2. **Get your authentication token**:
-   - Go to your cache settings on cachix.org
-   - Copy the authentication token
+**Key Features:**
+- ✅ Automatic release notes generation
+- ✅ Build metadata with commit info
+- ✅ Artifact retention for 90 days
+- ✅ Always pushes release builds to Cachix
 
-3. **Add GitHub secret**:
-   - Go to your GitHub repository → Settings → Secrets and variables → Actions
-   - Click "New repository secret"
-   - Name: `CACHIX_KEY`
-   - Value: Your Cachix authentication token
-   - Click "Add secret"
+## Configuration
 
-### Testing Workflows Locally
+### Required Secrets
 
-You can test the build locally using the same Nix commands:
+- **`CACHIX_KEY`**: Authentication token for Cachix
+  - Get from: https://app.cachix.org
+  - Add to: Repository Settings → Secrets → Actions
+  - Name: `CACHIX_KEY`
+  - Value: Your Cachix authentication token
 
-```bash
-# Install Nix (if not already installed)
-curl -L https://nixos.org/nix/install | sh
+### Cachix Cache
 
-# Enable flakes
-mkdir -p ~/.config/nix
-echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+Cache name: `cosmic-applet-package-updater`
+Public key: `cosmic-applet-package-updater.cachix.org-1:34TyvdAddZx+Ngn9LhYRcsUB3yjgTuT+8VAuFW0WmcM=`
 
-# Run the same checks as CI
-nix flake check --print-build-logs
-nix build .#default --print-build-logs
-nix build .#checks.x86_64-linux.clippy --print-build-logs
-nix build .#checks.x86_64-linux.fmt --print-build-logs
-```
+## Usage
 
-## Cachix Usage
+### For Users
 
-### Installing from Cachix
-
-Users can install pre-built binaries from Cachix to speed up installation:
+Install from Cachix (fast, no compilation):
 
 ```bash
 # Add the binary cache
 cachix use cosmic-applet-package-updater
 
-# Install using Nix
+# Install the package
 nix profile install github:olafkfreund/cosmic-applet-package-updater
 ```
 
-Or with NixOS configuration:
+### For NixOS Users
+
+Add to your configuration:
 
 ```nix
 {
@@ -100,48 +114,93 @@ Or with NixOS configuration:
       "cosmic-applet-package-updater.cachix.org-1:34TyvdAddZx+Ngn9LhYRcsUB3yjgTuT+8VAuFW0WmcM="
     ];
   };
+
+  environment.systemPackages = [
+    (pkgs.callPackage (builtins.fetchGit {
+      url = "https://github.com/olafkfreund/cosmic-applet-package-updater";
+      ref = "master";
+    }) {})
+  ];
 }
 ```
 
-### Benefits of Cachix
+## Improvements Over Previous Workflows
 
-- **Fast installations**: No need to compile from source
-- **Consistent builds**: Same binaries used in CI/CD
-- **Reduced build times**: CI/CD pipeline is faster with caching
-- **Bandwidth savings**: Binary caches are distributed via CDN
+### Better Structure
+- ✅ Separate jobs for build, checks, and validation
+- ✅ Parallel execution where possible
+- ✅ Clear job names and descriptions
+- ✅ Summary job for overall status
+
+### Better Performance
+- ✅ Concurrency control cancels duplicate runs
+- ✅ Only pushes to Cachix when needed (master/main or releases)
+- ✅ Path ignores for documentation changes
+- ✅ Separate check jobs can be cached independently
+
+### Better Debugging
+- ✅ `--show-trace` flag for detailed error traces
+- ✅ `--log-format bar-with-logs` for better output
+- ✅ Separate steps show exactly where failures occur
+- ✅ Build metadata includes commit info
+
+### Better Reliability
+- ✅ Uses latest stable action versions (v31, v15, v4)
+- ✅ Proper error handling and status checks
+- ✅ Validation of dev shell ensures reproducibility
+- ✅ Summary job catches any failures
+
+## Local Testing
+
+Test the same builds locally:
+
+```bash
+# Build the package
+nix build .#cosmic-ext-applet-package-updater --print-build-logs --show-trace
+
+# Run clippy checks
+nix build .#checks.x86_64-linux.clippy --print-build-logs --show-trace
+
+# Run format checks
+nix build .#checks.x86_64-linux.fmt --print-build-logs --show-trace
+
+# Run flake check
+nix flake check --print-build-logs --show-trace
+
+# Test dev shell
+nix develop --command bash -c "rustc --version && cargo --version"
+```
 
 ## Troubleshooting
 
-### Workflow fails with "CACHIX_KEY not found"
+### Workflow fails on clippy/fmt checks
 
-Make sure you've added the `CACHIX_KEY` secret to your repository settings.
+The workflow runs checks separately for better error reporting. If checks fail:
 
-### Cachix authentication fails
-
-Verify that:
-1. Your Cachix token is valid and not expired
-2. The cache name matches: `cosmic-applet-package-updater`
-3. The token has write permissions for the cache
-
-### Build fails on specific check
-
-Run the failing check locally:
 ```bash
-# For clippy
-nix build .#checks.x86_64-linux.clippy --print-build-logs
-
-# For format
-nix build .#checks.x86_64-linux.fmt --print-build-logs
+# Run locally to see the exact error
+nix build .#checks.x86_64-linux.clippy --print-build-logs --show-trace
+nix build .#checks.x86_64-linux.fmt --print-build-logs --show-trace
 ```
 
-### Cachix push is slow
+### Cachix push fails
 
-The `pushFilter` setting excludes source and system packages to reduce upload size. If needed, adjust this in the workflow file.
+Make sure:
+1. `CACHIX_KEY` secret is set correctly
+2. Cache name matches: `cosmic-applet-package-updater`
+3. Token has write permissions
+
+### Build succeeds locally but fails in CI
+
+Check:
+1. All files are committed (CI uses git checkout)
+2. Flake lock is up to date
+3. No local-only dependencies or paths
 
 ## References
 
-- [Cachix Documentation](https://docs.cachix.org/)
-- [cachix/install-nix-action](https://github.com/cachix/install-nix-action)
-- [cachix/cachix-action](https://github.com/cachix/cachix-action)
 - [Nix Flakes](https://nixos.wiki/wiki/Flakes)
+- [Cachix Documentation](https://docs.cachix.org/)
 - [GitHub Actions](https://docs.github.com/en/actions)
+- [install-nix-action](https://github.com/cachix/install-nix-action)
+- [cachix-action](https://github.com/cachix/cachix-action)
