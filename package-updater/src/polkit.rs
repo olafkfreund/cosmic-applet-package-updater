@@ -16,6 +16,7 @@ use tokio::process::Command as TokioCommand;
 use zbus::{zvariant, Connection};
 
 /// PolicyKit action identifier for package updates
+#[allow(dead_code)]
 pub const POLKIT_ACTION_UPDATE: &str = "com.github.cosmic-ext.package-updater.update";
 
 /// PolicyKit action identifier for checking updates

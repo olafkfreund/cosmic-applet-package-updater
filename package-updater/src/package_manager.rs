@@ -5,7 +5,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::Command;

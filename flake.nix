@@ -28,7 +28,7 @@
         # Crane library for building Rust projects
         craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
 
-        # Source filtering - include res/ directory and justfile
+        # Source filtering - include res/, policy/ directories and justfile
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
@@ -36,10 +36,14 @@
               baseName = baseNameOf (toString path);
               isRes = (type == "directory") && (baseName == "res");
               isInRes = pkgs.lib.hasInfix "/res/" path;
+              isPolicy = (type == "directory") && (baseName == "policy");
+              isInPolicy = pkgs.lib.hasInfix "/policy/" path;
               isJustfile = (type == "regular") && (baseName == "justfile");
             in
               isRes ||
               isInRes ||
+              isPolicy ||
+              isInPolicy ||
               isJustfile ||
               (craneLib.filterCargoSources path type);
         };

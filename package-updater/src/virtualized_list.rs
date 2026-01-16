@@ -34,27 +34,34 @@ use cosmic::{widget::column, Element};
 use std::marker::PhantomData;
 
 /// Number of items to render above/below visible area
+#[allow(dead_code)]
 const DEFAULT_BUFFER_SIZE: usize = 5;
 
 /// Minimum height for list items
+#[allow(dead_code)]
 const MIN_ITEM_HEIGHT: f32 = 30.0;
 
 /// Maximum items before virtualization kicks in
+#[allow(dead_code)]
 pub const VIRTUALIZATION_THRESHOLD: usize = 50;
 
 /// State for virtualized list widget
 #[derive(Debug, Clone)]
 pub struct VirtualizedState {
     /// Current scroll position in pixels
+    #[allow(dead_code)]
     scroll_offset: f32,
 
     /// Height of the viewport in pixels
+    #[allow(dead_code)]
     viewport_height: f32,
 
     /// Cache of item heights (if variable)
+    #[allow(dead_code)]
     item_heights: Vec<f32>,
 
     /// Total list height in pixels
+    #[allow(dead_code)]
     total_height: f32,
 }
 
@@ -256,11 +263,13 @@ impl<'a, T, Message: 'a> Default for VirtualizedList<'a, T, Message> {
 }
 
 /// Helper function to determine if virtualization is beneficial
+#[allow(dead_code)]
 pub fn should_virtualize(item_count: usize) -> bool {
     item_count >= VIRTUALIZATION_THRESHOLD
 }
 
 /// Calculate optimal buffer size based on item count
+#[allow(dead_code)]
 pub fn calculate_buffer_size(item_count: usize) -> usize {
     if item_count < 100 {
         DEFAULT_BUFFER_SIZE
@@ -272,6 +281,7 @@ pub fn calculate_buffer_size(item_count: usize) -> usize {
 }
 
 /// Estimate memory savings from virtualization
+#[allow(dead_code)]
 pub fn estimate_memory_savings(
     total_items: usize,
     visible_items: usize,

@@ -42,6 +42,7 @@ pub struct CosmicAppletPackageUpdater {
     error_message: Option<String>,
     available_package_managers: Vec<PackageManager>,
     ignore_next_sync: bool,
+    #[allow(dead_code)]
     virtualized_list_state: crate::virtualized_list::VirtualizedState,
 }
 
