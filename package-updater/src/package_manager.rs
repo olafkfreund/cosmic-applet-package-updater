@@ -1,11 +1,12 @@
 use anyhow::{anyhow, Result};
-use nix::fcntl::{Flock, FlockArg};
+#[allow(deprecated)]
+use nix::fcntl::{flock, FlockArg};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::os::unix::io::{AsFd, AsRawFd};
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::Command;
 use tokio::process::Command as TokioCommand;
@@ -305,6 +306,7 @@ impl UpdateChecker {
     }
 
     /// Acquire an exclusive lock using flock to prevent concurrent update checks
+    #[allow(deprecated)]
     async fn acquire_lock() -> Result<File> {
         let lock_path = Self::get_lock_path();
 
@@ -315,8 +317,8 @@ impl UpdateChecker {
             .open(&lock_path)?;
 
         // Try to acquire an exclusive non-blocking lock
-        match Flock::lock(file.as_fd(), FlockArg::LockExclusiveNonblock) {
-            Ok(_flock) => {
+        match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
+            Ok(()) => {
                 // Successfully acquired lock, write our PID
                 if let Err(e) = writeln!(&file, "{}", std::process::id()) {
                     eprintln!("Warning: Failed to write PID to lock file: {}", e);
