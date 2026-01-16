@@ -78,6 +78,9 @@
           pname = "cosmic-ext-applet-package-updater";
           version = "1.0.0";
 
+          # Skip tests during build - they require file I/O which conflicts with Nix sandbox
+          doCheck = false;
+
           # Use justfile for installation to match COSMIC conventions
           installPhaseCommand = ''
             just --set prefix "$out" --set bin-src "target/release/cosmic-ext-applet-package-updater" install
