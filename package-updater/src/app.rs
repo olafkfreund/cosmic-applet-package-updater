@@ -1,16 +1,17 @@
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::Config;
-use cosmic::iced::{time, Subscription, window::Id, Limits};
 use cosmic::iced::platform_specific::shell::wayland::commands::popup::{destroy_popup, get_popup};
 use cosmic::iced::window;
+use cosmic::iced::{time, window::Id, Limits, Subscription};
 use cosmic::widget::{
-    button, column, row, text, text_input, toggler, Space, horizontal_space, divider, scrollable, autosize
+    autosize, button, column, divider, horizontal_space, row, scrollable, text, text_input,
+    toggler, Space,
 };
 use cosmic::Element;
-use std::time::{Duration, Instant};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
-use crate::config::{PackageUpdaterConfig, NixOSMode};
+use crate::config::{NixOSMode, PackageUpdaterConfig};
 use crate::package_manager::{PackageManager, PackageManagerDetector, UpdateChecker, UpdateInfo};
 
 // Timing constants
@@ -118,7 +119,9 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
 
         // Auto-discover package managers on startup if none is configured
         if app.config.package_manager.is_none() {
-            tasks.push(Task::done(cosmic::Action::App(Message::DiscoverPackageManagers)));
+            tasks.push(Task::done(cosmic::Action::App(
+                Message::DiscoverPackageManagers,
+            )));
         }
 
         // Check for updates on startup if enabled and package manager is available
@@ -127,13 +130,16 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 // Add a delay to allow system to stabilize
                 tasks.push(Task::perform(
                     async move {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(STARTUP_DELAY_SECS)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(STARTUP_DELAY_SECS))
+                            .await;
                     },
                     |_| cosmic::Action::App(Message::CheckForUpdates),
                 ));
             } else {
                 // Delay the update check until after package manager discovery
-                tasks.push(Task::done(cosmic::Action::App(Message::DelayedStartupCheck)));
+                tasks.push(Task::done(cosmic::Action::App(
+                    Message::DelayedStartupCheck,
+                )));
             }
         }
 
@@ -158,7 +164,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                     .align_y(cosmic::iced::Alignment::Center)
                     .spacing(2)
                     .push(cosmic::widget::icon::from_name(self.get_icon_name()).size(16))
-                    .push(text(count_text).size(12))
+                    .push(text(count_text).size(12)),
             )
             .padding([8, 4])
             .class(cosmic::theme::Button::AppletIcon)
@@ -178,7 +184,8 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 .limits(limits)
                 .into()
         } else {
-            let icon_button = self.core
+            let icon_button = self
+                .core
                 .applet
                 .icon_button(&self.get_icon_name())
                 .on_press(Message::TogglePopup);
@@ -194,7 +201,9 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
-        let cosmic::cosmic_theme::Spacing { space_s, space_m, .. } = cosmic::theme::active().cosmic().spacing;
+        let cosmic::cosmic_theme::Spacing {
+            space_s, space_m, ..
+        } = cosmic::theme::active().cosmic().spacing;
 
         // Tab bar
         let updates_button = button::text(if self.active_tab == PopupTab::Updates {
@@ -214,10 +223,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
         let tabs = row()
             .width(cosmic::iced::Length::Fill)
             .push(updates_button)
-            .push(
-                cosmic::widget::container(horizontal_space())
-                    .width(cosmic::iced::Length::Fill)
-            )
+            .push(cosmic::widget::container(horizontal_space()).width(cosmic::iced::Length::Fill))
             .push(settings_button);
 
         // Tab content
@@ -236,11 +242,17 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
         };
 
         let status_text = if self.checking_updates {
-            text("Checking...").size(11).align_x(cosmic::iced::Alignment::Center)
+            text("Checking...")
+                .size(11)
+                .align_x(cosmic::iced::Alignment::Center)
         } else if self.update_info.has_updates() {
-            text(format!("{} Updates", self.update_info.total_updates)).size(11).align_x(cosmic::iced::Alignment::Center)
+            text(format!("{} Updates", self.update_info.total_updates))
+                .size(11)
+                .align_x(cosmic::iced::Alignment::Center)
         } else {
-            text("Up to Date").size(11).align_x(cosmic::iced::Alignment::Center)
+            text("Up to Date")
+                .size(11)
+                .align_x(cosmic::iced::Alignment::Center)
         };
 
         let package_illustration = cosmic::widget::container(
@@ -249,7 +261,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 .spacing(12)
                 .push(cosmic::widget::icon::from_name(icon_name).size(48))
                 .push(text(emoji).size(28))
-                .push(status_text)
+                .push(status_text),
         )
         .width(cosmic::iced::Length::Fixed(ILLUSTRATION_WIDTH))
         .height(cosmic::iced::Length::Fixed(ILLUSTRATION_HEIGHT))
@@ -268,7 +280,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 column()
                     .spacing(space_s)
                     .width(cosmic::iced::Length::Fill)
-                    .push(tab_content)
+                    .push(tab_content),
             )
             .push(package_illustration);
 
@@ -287,7 +299,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                     .min_height(POPUP_MIN_HEIGHT)
                     .max_height(POPUP_MAX_HEIGHT)
                     .min_width(POPUP_MIN_WIDTH)
-                    .max_width(POPUP_MAX_WIDTH)
+                    .max_width(POPUP_MAX_WIDTH),
             )
             .into()
     }
@@ -305,10 +317,12 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                     let include_aur = self.config.include_aur_updates;
                     let nixos_config = self.config.nixos_config.clone();
                     return Task::perform(
-                        async move {
-                            checker.check_updates(include_aur, &nixos_config).await
+                        async move { checker.check_updates(include_aur, &nixos_config).await },
+                        |result| {
+                            cosmic::Action::App(Message::UpdatesChecked(
+                                result.map_err(|e| e.to_string()),
+                            ))
                         },
-                        |result| cosmic::Action::App(Message::UpdatesChecked(result.map_err(|e| e.to_string()))),
                     );
                 }
                 Task::none()
@@ -341,12 +355,19 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                     return Task::perform(
                         async move {
                             // Create a unique marker file to track when the terminal closes
-                            let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-                                .unwrap_or_else(|e| {
-                                    eprintln!("Warning: XDG_RUNTIME_DIR not set: {}. Using /tmp", e);
+                            let runtime_dir =
+                                std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|e| {
+                                    eprintln!(
+                                        "Warning: XDG_RUNTIME_DIR not set: {}. Using /tmp",
+                                        e
+                                    );
                                     "/tmp".to_string()
                                 });
-                            let marker_file = format!("{}/cosmic-package-updater-terminal-{}.marker", runtime_dir, std::process::id());
+                            let marker_file = format!(
+                                "{}/cosmic-package-updater-terminal-{}.marker",
+                                runtime_dir,
+                                std::process::id()
+                            );
 
                             // Create the marker file
                             if let Err(e) = std::fs::File::create(&marker_file) {
@@ -376,11 +397,17 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                                         if !std::path::Path::new(&marker_file).exists() {
                                             break;
                                         }
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(MARKER_FILE_POLL_INTERVAL_MS)).await;
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(
+                                            MARKER_FILE_POLL_INTERVAL_MS,
+                                        ))
+                                        .await;
                                     }
 
                                     // Add a delay to allow system to stabilize after update
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(POST_UPDATE_STABILIZATION_SECS)).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(
+                                        POST_UPDATE_STABILIZATION_SECS,
+                                    ))
+                                    .await;
                                 }
                                 Err(e) => {
                                     eprintln!("Failed to spawn terminal: {}", e);
@@ -407,7 +434,10 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
 
                 // If package manager was just auto-configured and startup check is enabled,
                 // trigger the delayed startup check
-                if old_package_manager.is_none() && self.config.package_manager.is_some() && self.config.auto_check_on_startup {
+                if old_package_manager.is_none()
+                    && self.config.package_manager.is_some()
+                    && self.config.auto_check_on_startup
+                {
                     Task::done(cosmic::Action::App(Message::DelayedStartupCheck))
                 } else {
                     Task::none()
@@ -439,7 +469,10 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                     // Add a delay to allow system to stabilize
                     Task::perform(
                         async move {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(STARTUP_DELAY_SECS)).await;
+                            tokio::time::sleep(tokio::time::Duration::from_secs(
+                                STARTUP_DELAY_SECS,
+                            ))
+                            .await;
                         },
                         |_| cosmic::Action::App(Message::CheckForUpdates),
                     )
@@ -531,15 +564,15 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
 
         // Timer subscription for periodic checks
         if self.config.package_manager.is_some() {
-            let timer_subscription = time::every(Duration::from_secs(self.config.check_interval_minutes as u64 * 60))
-                .map(|_| Message::Timer);
+            let timer_subscription = time::every(Duration::from_secs(
+                self.config.check_interval_minutes as u64 * 60,
+            ))
+            .map(|_| Message::Timer);
             subscriptions.push(timer_subscription);
 
             // File watcher subscription to sync with other instances
-            let sync_subscription = Subscription::run_with_id(
-                "sync_watcher",
-                Self::watch_sync_file()
-            );
+            let sync_subscription =
+                Subscription::run_with_id("sync_watcher", Self::watch_sync_file());
             subscriptions.push(sync_subscription);
         }
 
@@ -553,15 +586,14 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
 
 impl CosmicAppletPackageUpdater {
     fn get_sync_path() -> PathBuf {
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-            .unwrap_or_else(|_| "/tmp".to_string());
+        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
         PathBuf::from(runtime_dir).join("cosmic-package-updater.sync")
     }
 
     fn watch_sync_file() -> impl futures::Stream<Item = Message> {
-        use notify::{Watcher, RecursiveMode, Event};
         use futures::channel::mpsc;
         use futures::StreamExt;
+        use notify::{Event, RecursiveMode, Watcher};
 
         async_stream::stream! {
             let sync_path = Self::get_sync_path();
@@ -613,23 +645,17 @@ impl CosmicAppletPackageUpdater {
             if let Some(main_window_id) = self.core.main_window_id() {
                 let new_id = Id::unique();
                 self.popup.replace(new_id);
-                let mut popup_settings = self.core.applet.get_popup_settings(
-                    main_window_id,
-                    new_id,
-                    None,
-                    None,
-                    None,
-                );
+                let mut popup_settings =
+                    self.core
+                        .applet
+                        .get_popup_settings(main_window_id, new_id, None, None, None);
                 popup_settings.positioner.size_limits = Limits::NONE
                     .max_width(POPUP_MAX_WIDTH)
                     .min_width(POPUP_MIN_WIDTH)
                     .min_height(POPUP_MIN_HEIGHT)
                     .max_height(POPUP_MAX_HEIGHT);
 
-                Task::batch(vec![
-                    get_popup(popup_settings),
-                    window::gain_focus(new_id),
-                ])
+                Task::batch(vec![get_popup(popup_settings), window::gain_focus(new_id)])
             } else {
                 eprintln!("Failed to get main window ID for popup");
                 self.error_message = Some("Unable to open popup window".to_string());
@@ -673,10 +699,7 @@ impl CosmicAppletPackageUpdater {
             widgets.extend(self.build_package_list());
         }
 
-        column()
-            .spacing(8)
-            .extend(widgets)
-            .into()
+        column().spacing(8).extend(widgets).into()
     }
 
     /// Build the status section showing update status and last check time
@@ -689,13 +712,28 @@ impl CosmicAppletPackageUpdater {
         } else if let Some(error) = &self.error_message {
             widgets.push(text(format!("Error: {}", error)).size(18).into());
         } else if self.update_info.has_updates() {
-            widgets.push(text(format!("{} updates available", self.update_info.total_updates)).size(18).into());
+            widgets.push(
+                text(format!(
+                    "{} updates available",
+                    self.update_info.total_updates
+                ))
+                .size(18)
+                .into(),
+            );
 
             // Only show package breakdown if package manager supports AUR
             if let Some(pm) = self.config.package_manager {
                 if pm.supports_aur() {
-                    widgets.push(text(format!("Official packages: {}", self.update_info.official_updates)).into());
-                    widgets.push(text(format!("AUR packages: {}", self.update_info.aur_updates)).into());
+                    widgets.push(
+                        text(format!(
+                            "Official packages: {}",
+                            self.update_info.official_updates
+                        ))
+                        .into(),
+                    );
+                    widgets.push(
+                        text(format!("AUR packages: {}", self.update_info.aur_updates)).into(),
+                    );
                 }
             }
         } else {
@@ -704,7 +742,11 @@ impl CosmicAppletPackageUpdater {
 
         // Last check time
         if let Some(last_check) = self.last_check {
-            widgets.push(text(self.format_last_check_time(last_check)).size(12).into());
+            widgets.push(
+                text(self.format_last_check_time(last_check))
+                    .size(12)
+                    .into(),
+            );
         }
 
         widgets
@@ -733,7 +775,7 @@ impl CosmicAppletPackageUpdater {
             button::text("Check for Updates")
                 .on_press(Message::CheckForUpdates)
                 .width(cosmic::iced::Length::Fill)
-                .into()
+                .into(),
         );
 
         // Update System button right after Check for Updates if updates available
@@ -742,9 +784,13 @@ impl CosmicAppletPackageUpdater {
                 button::text("Update System")
                     .on_press(Message::LaunchTerminalUpdate)
                     .width(cosmic::iced::Length::Fill)
-                    .into()
+                    .into(),
             );
-            widgets.push(text("💡 Tip: Middle-click on the Panel icon").size(10).into());
+            widgets.push(
+                text("💡 Tip: Middle-click on the Panel icon")
+                    .size(10)
+                    .into(),
+            );
         }
 
         widgets
@@ -758,7 +804,9 @@ impl CosmicAppletPackageUpdater {
         widgets.push(text("Packages to update:").size(14).into());
         widgets.push(Space::with_height(cosmic::iced::Length::Fixed(8.0)).into());
 
-        let supports_aur = self.config.package_manager
+        let supports_aur = self
+            .config
+            .package_manager
             .map(|pm| pm.supports_aur())
             .unwrap_or(false);
 
@@ -772,10 +820,12 @@ impl CosmicAppletPackageUpdater {
             cosmic::widget::container(
                 scrollable(package_list)
                     .width(cosmic::iced::Length::Fill)
-                    .height(cosmic::iced::Length::Fixed(PACKAGE_LIST_HEIGHT))
+                    .height(cosmic::iced::Length::Fixed(PACKAGE_LIST_HEIGHT)),
             )
             .style(|_theme| cosmic::widget::container::Style {
-                background: Some(cosmic::iced_core::Background::Color([0.1, 0.1, 0.1, 0.1].into())),
+                background: Some(cosmic::iced_core::Background::Color(
+                    [0.1, 0.1, 0.1, 0.1].into(),
+                )),
                 border: cosmic::iced::Border {
                     radius: cosmic::iced::border::Radius::from(8.0),
                     width: 1.0,
@@ -785,7 +835,7 @@ impl CosmicAppletPackageUpdater {
             })
             .padding(12)
             .width(cosmic::iced::Length::Fill)
-            .into()
+            .into(),
         );
 
         widgets
@@ -795,10 +845,16 @@ impl CosmicAppletPackageUpdater {
     fn build_grouped_package_list(&self) -> cosmic::widget::Column<'_, Message> {
         let mut package_list = column().spacing(4);
 
-        let official_packages: Vec<_> = self.update_info.packages.iter()
+        let official_packages: Vec<_> = self
+            .update_info
+            .packages
+            .iter()
             .filter(|p| !p.is_aur)
             .collect();
-        let aur_packages: Vec<_> = self.update_info.packages.iter()
+        let aur_packages: Vec<_> = self
+            .update_info
+            .packages
+            .iter()
             .filter(|p| p.is_aur)
             .collect();
 
@@ -811,7 +867,8 @@ impl CosmicAppletPackageUpdater {
 
         if !aur_packages.is_empty() {
             if !official_packages.is_empty() {
-                package_list = package_list.push(Space::with_height(cosmic::iced::Length::Fixed(8.0)));
+                package_list =
+                    package_list.push(Space::with_height(cosmic::iced::Length::Fixed(8.0)));
             }
             package_list = package_list.push(text("AUR:").size(12));
             for package in aur_packages.iter() {
@@ -834,7 +891,10 @@ impl CosmicAppletPackageUpdater {
     /// Format package update text with version information
     fn format_package_text(&self, package: &crate::package_manager::PackageUpdate) -> String {
         if package.current_version != "unknown" {
-            format!("  {} {} → {}", package.name, package.current_version, package.new_version)
+            format!(
+                "  {} {} → {}",
+                package.name, package.current_version, package.new_version
+            )
         } else {
             format!("  {} → {}", package.name, package.new_version)
         }
@@ -853,7 +913,14 @@ impl CosmicAppletPackageUpdater {
                     .into(),
             );
         } else {
-            widgets.push(text(format!("Found {} package managers:", self.available_package_managers.len())).size(12).into());
+            widgets.push(
+                text(format!(
+                    "Found {} package managers:",
+                    self.available_package_managers.len()
+                ))
+                .size(12)
+                .into(),
+            );
             for &pm in &self.available_package_managers {
                 let is_selected = self.config.package_manager == Some(pm);
                 let button_text = if is_selected {
@@ -882,16 +949,24 @@ impl CosmicAppletPackageUpdater {
                 row()
                     .spacing(8)
                     .push(
-                        button::text(if flakes_selected { "● Flakes" } else { "○ Flakes" })
-                            .on_press(Message::SetNixOSMode(NixOSMode::Flakes))
-                            .width(cosmic::iced::Length::Fill)
+                        button::text(if flakes_selected {
+                            "● Flakes"
+                        } else {
+                            "○ Flakes"
+                        })
+                        .on_press(Message::SetNixOSMode(NixOSMode::Flakes))
+                        .width(cosmic::iced::Length::Fill),
                     )
                     .push(
-                        button::text(if !flakes_selected { "● Channels" } else { "○ Channels" })
-                            .on_press(Message::SetNixOSMode(NixOSMode::Channels))
-                            .width(cosmic::iced::Length::Fill)
+                        button::text(if !flakes_selected {
+                            "● Channels"
+                        } else {
+                            "○ Channels"
+                        })
+                        .on_press(Message::SetNixOSMode(NixOSMode::Channels))
+                        .width(cosmic::iced::Length::Fill),
                     )
-                    .into()
+                    .into(),
             );
 
             widgets.push(Space::with_height(cosmic::iced::Length::Fixed(8.0)).into());
@@ -902,14 +977,14 @@ impl CosmicAppletPackageUpdater {
                 text_input("/etc/nixos", &self.config.nixos_config.config_path)
                     .on_input(Message::SetNixOSConfigPath)
                     .width(cosmic::iced::Length::Fill)
-                    .into()
+                    .into(),
             );
 
             // Help text
             widgets.push(
                 text("Path to your NixOS configuration directory")
                     .size(10)
-                    .into()
+                    .into(),
             );
 
             // Auto-detection button
@@ -918,7 +993,7 @@ impl CosmicAppletPackageUpdater {
                 button::text("Auto-detect Mode")
                     .on_press(Message::AutoDetectNixOSMode)
                     .width(cosmic::iced::Length::Fill)
-                    .into()
+                    .into(),
             );
 
             widgets.push(Space::with_height(cosmic::iced::Length::Fixed(16.0)).into());
@@ -929,7 +1004,9 @@ impl CosmicAppletPackageUpdater {
         let interval_value = self.config.check_interval_minutes.to_string();
         widgets.push(
             text_input("60", interval_value)
-                .on_input(|s| Message::SetCheckInterval(s.parse::<u32>().unwrap_or(60).max(1).min(1440)))
+                .on_input(|s| {
+                    Message::SetCheckInterval(s.parse::<u32>().unwrap_or(60).max(1).min(1440))
+                })
                 .width(cosmic::iced::Length::Fill)
                 .into(),
         );
@@ -943,7 +1020,9 @@ impl CosmicAppletPackageUpdater {
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(text("Auto-check on startup"))
                 .push(Space::with_width(cosmic::iced::Length::Fill))
-                .push(toggler(self.config.auto_check_on_startup).on_toggle(Message::ToggleAutoCheck))
+                .push(
+                    toggler(self.config.auto_check_on_startup).on_toggle(Message::ToggleAutoCheck),
+                )
                 .into(),
         );
 
@@ -956,7 +1035,10 @@ impl CosmicAppletPackageUpdater {
                         .align_y(cosmic::iced::Alignment::Center)
                         .push(text("Include AUR updates"))
                         .push(Space::with_width(cosmic::iced::Length::Fill))
-                        .push(toggler(self.config.include_aur_updates).on_toggle(Message::ToggleIncludeAur))
+                        .push(
+                            toggler(self.config.include_aur_updates)
+                                .on_toggle(Message::ToggleIncludeAur),
+                        )
                         .into(),
                 );
             }
@@ -968,7 +1050,10 @@ impl CosmicAppletPackageUpdater {
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(text("Show notifications"))
                 .push(Space::with_width(cosmic::iced::Length::Fill))
-                .push(toggler(self.config.show_notifications).on_toggle(Message::ToggleShowNotifications))
+                .push(
+                    toggler(self.config.show_notifications)
+                        .on_toggle(Message::ToggleShowNotifications),
+                )
                 .into(),
         );
 
@@ -978,7 +1063,10 @@ impl CosmicAppletPackageUpdater {
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(text("Show update count"))
                 .push(Space::with_width(cosmic::iced::Length::Fill))
-                .push(toggler(self.config.show_update_count).on_toggle(Message::ToggleShowUpdateCount))
+                .push(
+                    toggler(self.config.show_update_count)
+                        .on_toggle(Message::ToggleShowUpdateCount),
+                )
                 .into(),
         );
 
@@ -998,9 +1086,6 @@ impl CosmicAppletPackageUpdater {
                 .into(),
         );
 
-        column()
-            .spacing(8)
-            .extend(widgets)
-            .into()
+        column().spacing(8).extend(widgets).into()
     }
 }

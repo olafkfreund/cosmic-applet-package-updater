@@ -1,14 +1,14 @@
 use anyhow::{anyhow, Result};
+use nix::fcntl::{flock, FlockArg};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::fs::{File, OpenOptions};
+use std::io::{ErrorKind, Write};
+use std::os::unix::io::AsRawFd;
+use std::path::PathBuf;
 use std::process::Command;
 use tokio::process::Command as TokioCommand;
-use std::path::PathBuf;
-use std::fs::{File, OpenOptions};
-use std::io::{Write, ErrorKind};
-use std::os::unix::io::AsRawFd;
-use nix::fcntl::{flock, FlockArg};
-use regex::Regex;
-use once_cell::sync::Lazy;
 
 // Retry and timing constants
 const LOCK_RETRY_DELAY_SECS: u64 = 2;
@@ -16,7 +16,7 @@ const UPDATE_RETRY_DELAY_SECS: u64 = 1;
 
 // Compiled regex patterns for NixOS flake parsing
 static FLAKE_UPDATE_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?:Updated|updated|updating|Will update)\s+(?:input\s+)?['\"]?([^'\s:]+)['\"]?:?\s+['\"]?([^'\"]+)['\"]?\s+(?:->|→|to)\s+['\"]?([^'\"]+)['\"]?").unwrap()
+    Regex::new(r#"(?:Updated|updated|updating|Will update)\s+(?:input\s+)?['"]?([^\s':]+)['"]?:?\s+['"]?([^'"]+)['"]?\s+(?:->|→|to)\s+['"]?([^'"]+)['"]?"#).unwrap()
 });
 
 /// Package manager types supported by the updater applet.
@@ -64,13 +64,15 @@ impl PackageManager {
         matches!(self, PackageManager::Paru | PackageManager::Yay)
     }
 
-
     /// Get the system update command for this package manager.
     ///
     /// # Arguments
     ///
     /// * `nixos_config` - NixOS configuration (required for NixOS package manager)
-    pub fn system_update_command(&self, nixos_config: Option<&crate::config::NixOSConfig>) -> String {
+    pub fn system_update_command(
+        &self,
+        nixos_config: Option<&crate::config::NixOSConfig>,
+    ) -> String {
         match self {
             PackageManager::Pacman => "sudo pacman -Syu".to_string(),
             PackageManager::Paru => "paru -Syu".to_string(),
@@ -84,7 +86,8 @@ impl PackageManager {
                 if let Some(config) = nixos_config {
                     match config.mode {
                         crate::config::NixOSMode::Channels => {
-                            "sudo nix-channel --update && sudo nixos-rebuild switch --upgrade".to_string()
+                            "sudo nix-channel --update && sudo nixos-rebuild switch --upgrade"
+                                .to_string()
                         }
                         crate::config::NixOSMode::Flakes => {
                             format!(
@@ -202,12 +205,12 @@ impl PackageManagerDetector {
 
                         // Verify it's in a system path (not in /tmp, home dir, etc.)
                         // This prevents executing arbitrary binaries from unsafe locations
-                        path.starts_with("/usr/") ||
-                        path.starts_with("/bin/") ||
-                        path.starts_with("/sbin/") ||
-                        path.starts_with("/nix/store/") ||
-                        path.starts_with("/run/current-system/") ||
-                        path.starts_with("/opt/")
+                        path.starts_with("/usr/")
+                            || path.starts_with("/bin/")
+                            || path.starts_with("/sbin/")
+                            || path.starts_with("/nix/store/")
+                            || path.starts_with("/run/current-system/")
+                            || path.starts_with("/opt/")
                     } else {
                         false
                     }
@@ -231,8 +234,8 @@ impl PackageManagerDetector {
         }
 
         // Check if we're actually on NixOS
-        std::path::Path::new("/etc/NIXOS").exists() ||
-        std::path::Path::new("/run/current-system").exists()
+        std::path::Path::new("/etc/NIXOS").exists()
+            || std::path::Path::new("/run/current-system").exists()
     }
 
     pub fn detect_nixos_mode(config_path: &str) -> crate::config::NixOSMode {
@@ -270,14 +273,12 @@ impl UpdateChecker {
     }
 
     fn get_lock_path() -> PathBuf {
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-            .unwrap_or_else(|_| "/tmp".to_string());
+        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
         PathBuf::from(runtime_dir).join("cosmic-package-updater.lock")
     }
 
     fn get_sync_path() -> PathBuf {
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-            .unwrap_or_else(|_| "/tmp".to_string());
+        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
         PathBuf::from(runtime_dir).join("cosmic-package-updater.sync")
     }
 
@@ -290,11 +291,14 @@ impl UpdateChecker {
             .truncate(true)
             .open(&sync_path)
         {
-            if let Err(e) = writeln!(file, "{}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs())
-            {
+            if let Err(e) = writeln!(
+                file,
+                "{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            ) {
                 eprintln!("Warning: Failed to write sync file: {}", e);
             }
         }
@@ -323,9 +327,7 @@ impl UpdateChecker {
                 // Lock is held by another process
                 Err(anyhow!("Another instance is checking for updates"))
             }
-            Err(e) => {
-                Err(anyhow!("Failed to acquire lock: {}", e))
-            }
+            Err(e) => Err(anyhow!("Failed to acquire lock: {}", e)),
         }
     }
 
@@ -339,7 +341,11 @@ impl UpdateChecker {
     /// # Returns
     ///
     /// `UpdateInfo` containing all available updates, or an error if the check failed
-    pub async fn check_updates(&self, include_aur: bool, nixos_config: &crate::config::NixOSConfig) -> Result<UpdateInfo> {
+    pub async fn check_updates(
+        &self,
+        include_aur: bool,
+        nixos_config: &crate::config::NixOSConfig,
+    ) -> Result<UpdateInfo> {
         // Try to acquire lock first
         let _lock = match Self::acquire_lock().await {
             Ok(lock) => lock,
@@ -393,7 +399,8 @@ impl UpdateChecker {
                 Err(e) => {
                     eprintln!("Failed to check AUR updates: {}", e);
                     // Retry once after a delay
-                    tokio::time::sleep(tokio::time::Duration::from_secs(UPDATE_RETRY_DELAY_SECS)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(UPDATE_RETRY_DELAY_SECS))
+                        .await;
                     match self.check_aur_updates().await {
                         Ok(aur_updates) => {
                             let count = aur_updates.len();
@@ -419,32 +426,25 @@ impl UpdateChecker {
         Ok(update_info)
     }
 
-    async fn check_official_updates(&self, nixos_config: &crate::config::NixOSConfig) -> Result<Vec<PackageUpdate>> {
+    async fn check_official_updates(
+        &self,
+        nixos_config: &crate::config::NixOSConfig,
+    ) -> Result<Vec<PackageUpdate>> {
         let (cmd, args) = match self.package_manager {
             // Arch-based systems
             PackageManager::Pacman | PackageManager::Paru | PackageManager::Yay => {
                 ("checkupdates", vec![])
             }
             // Debian/Ubuntu
-            PackageManager::Apt => {
-                ("apt", vec!["list", "--upgradable"])
-            }
+            PackageManager::Apt => ("apt", vec!["list", "--upgradable"]),
             // Fedora/RHEL
-            PackageManager::Dnf => {
-                ("dnf", vec!["check-update", "-q"])
-            }
+            PackageManager::Dnf => ("dnf", vec!["check-update", "-q"]),
             // openSUSE/SUSE
-            PackageManager::Zypper => {
-                ("zypper", vec!["list-updates"])
-            }
+            PackageManager::Zypper => ("zypper", vec!["list-updates"]),
             // Alpine Linux
-            PackageManager::Apk => {
-                ("apk", vec!["-u", "list"])
-            }
+            PackageManager::Apk => ("apk", vec!["-u", "list"]),
             // Flatpak
-            PackageManager::Flatpak => {
-                ("flatpak", vec!["remote-ls", "--updates"])
-            }
+            PackageManager::Flatpak => ("flatpak", vec!["remote-ls", "--updates"]),
             // NixOS
             PackageManager::NixOS => {
                 return self.check_nixos_updates(nixos_config).await;
@@ -466,11 +466,13 @@ impl UpdateChecker {
         self.parse_update_output(cmd, args, true).await
     }
 
-    async fn parse_update_output(&self, cmd: &str, args: Vec<&str>, is_aur: bool) -> Result<Vec<PackageUpdate>> {
-        let output = TokioCommand::new(cmd)
-            .args(&args)
-            .output()
-            .await?;
+    async fn parse_update_output(
+        &self,
+        cmd: &str,
+        args: Vec<&str>,
+        is_aur: bool,
+    ) -> Result<Vec<PackageUpdate>> {
+        let output = TokioCommand::new(cmd).args(&args).output().await?;
 
         if !output.status.success() {
             let exit_code = output.status.code().unwrap_or(-1);
@@ -480,9 +482,10 @@ impl UpdateChecker {
             // paru/yay return 1 when no updates are available
             // dnf returns 100 when updates are available, 0 when no updates
             // apt returns non-zero on error but we check stdout
-            if (cmd == "checkupdates" && exit_code == 2) ||
-               ((cmd == "paru" || cmd == "yay") && exit_code == 1) ||
-               (cmd == "dnf" && exit_code == 100) {
+            if (cmd == "checkupdates" && exit_code == 2)
+                || ((cmd == "paru" || cmd == "yay") && exit_code == 1)
+                || (cmd == "dnf" && exit_code == 100)
+            {
                 // No updates available or special success case
                 if cmd == "dnf" && exit_code == 100 {
                     // dnf exit code 100 means updates ARE available, continue parsing
@@ -495,8 +498,15 @@ impl UpdateChecker {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 if stdout.trim().is_empty() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    eprintln!("Update check failed with exit code {}: {}", exit_code, stderr);
-                    return Err(anyhow!("Failed to check for updates (exit {}): {}", exit_code, stderr));
+                    eprintln!(
+                        "Update check failed with exit code {}: {}",
+                        exit_code, stderr
+                    );
+                    return Err(anyhow!(
+                        "Failed to check for updates (exit {}): {}",
+                        exit_code,
+                        stderr
+                    ));
                 }
                 // Otherwise continue to parse the output
             }
@@ -516,9 +526,13 @@ impl UpdateChecker {
 
     fn parse_package_line(&self, line: &str, is_aur: bool) -> Option<PackageUpdate> {
         // Skip header lines
-        if line.starts_with("Listing...") || line.starts_with("Done") ||
-           line.starts_with("WARNING:") || line.starts_with("S |") ||
-           line.starts_with("--+") || line.trim().is_empty() {
+        if line.starts_with("Listing...")
+            || line.starts_with("Done")
+            || line.starts_with("WARNING:")
+            || line.starts_with("S |")
+            || line.starts_with("--+")
+            || line.trim().is_empty()
+        {
             return None;
         }
 
@@ -633,16 +647,17 @@ impl UpdateChecker {
                         // Extract versions
                         let new_version = parts.get(1).unwrap_or(&"unknown").to_string();
 
-                        let current_version = if let Some(from_idx) = line.find("[upgradable from: ") {
-                            let start = from_idx + "[upgradable from: ".len();
-                            if let Some(end_idx) = line[start..].find(']') {
-                                line[start..start + end_idx].to_string()
+                        let current_version =
+                            if let Some(from_idx) = line.find("[upgradable from: ") {
+                                let start = from_idx + "[upgradable from: ".len();
+                                if let Some(end_idx) = line[start..].find(']') {
+                                    line[start..start + end_idx].to_string()
+                                } else {
+                                    "unknown".to_string()
+                                }
                             } else {
                                 "unknown".to_string()
-                            }
-                        } else {
-                            "unknown".to_string()
-                        };
+                            };
 
                         return Some(PackageUpdate {
                             name,
@@ -682,7 +697,7 @@ impl UpdateChecker {
     /// Check if passwordless sudo is configured for the current user
     async fn check_passwordless_sudo() -> Result<bool> {
         let output = TokioCommand::new("sudo")
-            .args(&["-n", "true"])  // -n = non-interactive
+            .args(&["-n", "true"]) // -n = non-interactive
             .output()
             .await?;
         Ok(output.status.success())
@@ -697,7 +712,9 @@ impl UpdateChecker {
                 &["dry-build", "--upgrade"],
                 crate::polkit::POLKIT_ACTION_CHECK,
                 "Authentication required to check for NixOS updates",
-            ).await {
+            )
+            .await
+            {
                 Ok(output) => {
                     if !output.status.success() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -740,7 +757,10 @@ impl UpdateChecker {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Check if it's a permission issue
-            if stderr.contains("not allowed") || stderr.contains("password") || stderr.contains("sudo") {
+            if stderr.contains("not allowed")
+                || stderr.contains("password")
+                || stderr.contains("sudo")
+            {
                 return Err(anyhow!(
                     "Permission denied. Use PolicyKit or configure passwordless sudo for nixos-rebuild:\n\
                      Add to /etc/sudoers.d/nixos-rebuild:\n\
@@ -766,7 +786,9 @@ impl UpdateChecker {
         let mut updates = Vec::new();
 
         for cap in FLAKE_UPDATE_REGEX.captures_iter(output) {
-            if let (Some(input_name), Some(old_ref), Some(new_ref)) = (cap.get(1), cap.get(2), cap.get(3)) {
+            if let (Some(input_name), Some(old_ref), Some(new_ref)) =
+                (cap.get(1), cap.get(2), cap.get(3))
+            {
                 let input_name = input_name.as_str();
                 let old_ref_str = old_ref.as_str();
                 let new_ref_str = new_ref.as_str();
@@ -882,7 +904,9 @@ impl UpdateChecker {
 
         for line in output.lines() {
             // Match: "these 47 derivations will be built:"
-            if line.contains("derivations will be built") || line.contains("derivation will be built") {
+            if line.contains("derivations will be built")
+                || line.contains("derivation will be built")
+            {
                 if let Some(num_str) = line.split_whitespace().nth(1) {
                     if let Ok(num) = num_str.parse::<usize>() {
                         packages_to_build = num;
@@ -928,13 +952,15 @@ impl UpdateChecker {
         Ok(updates)
     }
 
-    async fn check_nixos_updates(&self, config: &crate::config::NixOSConfig) -> Result<Vec<PackageUpdate>> {
+    async fn check_nixos_updates(
+        &self,
+        config: &crate::config::NixOSConfig,
+    ) -> Result<Vec<PackageUpdate>> {
         match config.mode {
             crate::config::NixOSMode::Channels => self.check_nixos_channels().await,
             crate::config::NixOSMode::Flakes => self.check_nixos_flakes(&config.config_path).await,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -1172,21 +1198,26 @@ mod tests {
         // Try to acquire lock while first one is held
         let lock2 = UpdateChecker::acquire_lock().await;
         assert!(lock2.is_err(), "Second lock acquisition should fail");
-        assert!(lock2.unwrap_err().to_string().contains("Another instance"),
-                "Error should indicate another instance is running");
+        assert!(
+            lock2.unwrap_err().to_string().contains("Another instance"),
+            "Error should indicate another instance is running"
+        );
 
         // Release first lock
         drop(lock1);
 
         // Now should be able to acquire
         let lock3 = UpdateChecker::acquire_lock().await;
-        assert!(lock3.is_ok(), "Lock acquisition should succeed after first lock released");
+        assert!(
+            lock3.is_ok(),
+            "Lock acquisition should succeed after first lock released"
+        );
     }
 
     #[tokio::test]
     async fn test_lock_retry_logic() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
         use tokio::time::Duration;
 
         // Acquire lock in this test
@@ -1205,11 +1236,17 @@ mod tests {
 
         // Wait for lock to be released
         tokio::time::sleep(Duration::from_millis(600)).await;
-        assert!(lock_released.load(Ordering::SeqCst), "Lock should be released");
+        assert!(
+            lock_released.load(Ordering::SeqCst),
+            "Lock should be released"
+        );
 
         // Now acquire should succeed
         let new_lock = UpdateChecker::acquire_lock().await;
-        assert!(new_lock.is_ok(), "Lock acquisition should succeed after wait");
+        assert!(
+            new_lock.is_ok(),
+            "Lock acquisition should succeed after wait"
+        );
     }
 
     #[tokio::test]
@@ -1226,7 +1263,10 @@ mod tests {
 
         // Should contain current process ID
         let pid = std::process::id().to_string();
-        assert!(contents.contains(&pid), "Lock file should contain process ID");
+        assert!(
+            contents.contains(&pid),
+            "Lock file should contain process ID"
+        );
 
         drop(lock);
     }
@@ -1243,7 +1283,10 @@ mod tests {
         UpdateChecker::notify_check_completed();
 
         // Verify sync file was created
-        assert!(sync_path.exists(), "Sync file should exist after notification");
+        assert!(
+            sync_path.exists(),
+            "Sync file should exist after notification"
+        );
 
         // Read sync file contents
         let mut file = std::fs::File::open(&sync_path).unwrap();
@@ -1275,14 +1318,20 @@ mod tests {
 
         // Should use XDG_RUNTIME_DIR if set, otherwise /tmp
         if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-            assert!(path_str.starts_with(&runtime_dir),
-                    "Lock path should use XDG_RUNTIME_DIR");
+            assert!(
+                path_str.starts_with(&runtime_dir),
+                "Lock path should use XDG_RUNTIME_DIR"
+            );
         } else {
-            assert!(path_str.starts_with("/tmp"),
-                    "Lock path should use /tmp as fallback");
+            assert!(
+                path_str.starts_with("/tmp"),
+                "Lock path should use /tmp as fallback"
+            );
         }
 
-        assert!(path_str.ends_with("cosmic-package-updater.lock"),
-                "Lock path should end with correct filename");
+        assert!(
+            path_str.ends_with("cosmic-package-updater.lock"),
+            "Lock path should end with correct filename"
+        );
     }
 }

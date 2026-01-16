@@ -10,12 +10,11 @@
 /// - Session-based authorization caching
 /// - Audit logging of privileged operations
 /// - No need for sudoers configuration
-
 use anyhow::{anyhow, Result};
-use zbus::{Connection, zvariant};
 use std::collections::HashMap;
 use std::os::unix::process::CommandExt;
 use tokio::process::Command as TokioCommand;
+use zbus::{zvariant, Connection};
 
 /// PolicyKit action identifier for package updates
 pub const POLKIT_ACTION_UPDATE: &str = "com.github.cosmic-ext.package-updater.update";
@@ -35,7 +34,8 @@ impl PolkitAuth {
     ///
     /// Returns an error if D-Bus connection cannot be established
     pub async fn new() -> Result<Self> {
-        let connection = Connection::system().await
+        let connection = Connection::system()
+            .await
             .map_err(|e| anyhow!("Failed to connect to system D-Bus: {}", e))?;
         Ok(Self { connection })
     }
@@ -55,23 +55,29 @@ impl PolkitAuth {
             "org.freedesktop.PolicyKit1",
             "/org/freedesktop/PolicyKit1/Authority",
             "org.freedesktop.PolicyKit1.Authority",
-        ).await?;
+        )
+        .await?;
 
         // Get current process info for subject
         let pid = std::process::id();
         let subject: HashMap<&str, zvariant::Value> = [
             ("pid", zvariant::Value::U32(pid)),
             ("start-time", zvariant::Value::U64(0)),
-        ].iter().cloned().collect();
+        ]
+        .iter()
+        .cloned()
+        .collect();
 
         // Empty details
         let details: HashMap<&str, &str> = HashMap::new();
 
         // Check authorization
-        let result: zbus::Result<(bool, bool, HashMap<String, String>)> = proxy.call(
-            "CheckAuthorization",
-            &(subject, action_id, details, 1u32, ""),
-        ).await;
+        let result: zbus::Result<(bool, bool, HashMap<String, String>)> = proxy
+            .call(
+                "CheckAuthorization",
+                &(subject, action_id, details, 1u32, ""),
+            )
+            .await;
 
         match result {
             Ok((is_authorized, _is_challenge, _details)) => Ok(is_authorized),
@@ -103,7 +109,7 @@ impl PolkitAuth {
         let output = TokioCommand::new("pkexec")
             .arg("--user")
             .arg("root")
-            .arg("true")  // Just run 'true' to test authorization
+            .arg("true") // Just run 'true' to test authorization
             .env("PKEXEC_MESSAGE", message)
             .output()
             .await?;
@@ -167,9 +173,7 @@ impl PolkitAuth {
     /// `true` if PolicyKit and pkexec are available
     pub async fn is_available() -> bool {
         // Check if pkexec is available
-        let pkexec_check = std::process::Command::new("which")
-            .arg("pkexec")
-            .output();
+        let pkexec_check = std::process::Command::new("which").arg("pkexec").output();
 
         if pkexec_check.is_err() || !pkexec_check.unwrap().status.success() {
             return false;
@@ -182,7 +186,8 @@ impl PolkitAuth {
                 "org.freedesktop.PolicyKit1",
                 "/org/freedesktop/PolicyKit1/Authority",
                 "org.freedesktop.PolicyKit1.Authority",
-            ).await;
+            )
+            .await;
             proxy_result.is_ok()
         } else {
             false
@@ -215,7 +220,10 @@ pub async fn execute_privileged(
     if PolkitAuth::is_available().await {
         match PolkitAuth::new().await {
             Ok(polkit) => {
-                match polkit.execute_as_root(action_id, command, args, message).await {
+                match polkit
+                    .execute_as_root(action_id, command, args, message)
+                    .await
+                {
                     Ok(output) => return Ok(output),
                     Err(e) => {
                         eprintln!("PolicyKit execution failed: {}, falling back to sudo", e);
@@ -223,7 +231,10 @@ pub async fn execute_privileged(
                 }
             }
             Err(e) => {
-                eprintln!("Failed to initialize PolicyKit: {}, falling back to sudo", e);
+                eprintln!(
+                    "Failed to initialize PolicyKit: {}, falling back to sudo",
+                    e
+                );
             }
         }
     }
@@ -261,7 +272,13 @@ mod tests {
 
     #[test]
     fn test_action_constants() {
-        assert_eq!(POLKIT_ACTION_UPDATE, "com.github.cosmic-ext.package-updater.update");
-        assert_eq!(POLKIT_ACTION_CHECK, "com.github.cosmic-ext.package-updater.check");
+        assert_eq!(
+            POLKIT_ACTION_UPDATE,
+            "com.github.cosmic-ext.package-updater.update"
+        );
+        assert_eq!(
+            POLKIT_ACTION_CHECK,
+            "com.github.cosmic-ext.package-updater.check"
+        );
     }
 }

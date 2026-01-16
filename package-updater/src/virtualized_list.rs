@@ -28,7 +28,6 @@
 ///         row![text(&package.name)]
 ///     });
 /// ```
-
 use cosmic::iced::{Element, Length};
 use cosmic::widget::{column, container, scrollable, text};
 use std::marker::PhantomData;
@@ -212,32 +211,21 @@ where
 
         // Top spacer
         if top_spacer_height > 0.0 {
-            col = col.push(
-                container(text(""))
-                    .height(Length::Fixed(top_spacer_height))
-            );
+            col = col.push(container(text("")).height(Length::Fixed(top_spacer_height)));
         }
 
         // Visible items
         for item in &self.items[start_idx..end_idx] {
-            col = col.push(
-                container(view_fn(item))
-                    .height(Length::Fixed(self.item_height))
-            );
+            col = col.push(container(view_fn(item)).height(Length::Fixed(self.item_height)));
         }
 
         // Bottom spacer
         if bottom_spacer_height > 0.0 {
-            col = col.push(
-                container(text(""))
-                    .height(Length::Fixed(bottom_spacer_height))
-            );
+            col = col.push(container(text("")).height(Length::Fixed(bottom_spacer_height)));
         }
 
         // Wrap in scrollable
-        scrollable(col)
-            .height(Length::Fill)
-            .into()
+        scrollable(col).height(Length::Fill).into()
     }
 
     /// Build simple non-virtualized list (for small lists)
@@ -256,9 +244,7 @@ where
             col = col.push(view_fn(item));
         }
 
-        scrollable(col)
-            .height(Length::Fill)
-            .into()
+        scrollable(col).height(Length::Fill).into()
     }
 }
 
