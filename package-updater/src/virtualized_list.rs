@@ -29,8 +29,8 @@
 ///     });
 /// ```
 use cosmic::iced::Length;
-use cosmic::widget::{column, container, scrollable, text};
-use cosmic::Element;
+use cosmic::widget::{container, scrollable, text};
+use cosmic::{widget::column, Element};
 use std::marker::PhantomData;
 
 /// Number of items to render above/below visible area
@@ -208,7 +208,7 @@ where
             (self.items.len().saturating_sub(end_idx)) as f32 * self.item_height;
 
         // Build column with only visible items
-        let mut col = column![].spacing(0);
+        let mut col = column().spacing(0);
 
         // Top spacer
         if top_spacer_height > 0.0 {
@@ -239,7 +239,7 @@ where
             None => return text("No view function provided").into(),
         };
 
-        let mut col = column![].spacing(2);
+        let mut col = column().spacing(2);
 
         for item in self.items {
             col = col.push(view_fn(item));

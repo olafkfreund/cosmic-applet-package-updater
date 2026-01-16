@@ -12,7 +12,6 @@
 /// - No need for sudoers configuration
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
-use std::os::unix::process::CommandExt;
 use tokio::process::Command as TokioCommand;
 use zbus::{zvariant, Connection};
 
