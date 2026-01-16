@@ -96,7 +96,8 @@ Or with NixOS configuration:
       "https://cosmic-applet-package-updater.cachix.org"
     ];
     trusted-public-keys = [
-      "cosmic-applet-package-updater.cachix.org-1:YOUR_PUBLIC_KEY_HERE"
+      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+      "cosmic-applet-package-updater.cachix.org-1:34TyvdAddZx+Ngn9LhYRcsUB3yjgTuT+8VAuFW0WmcM="
     ];
   };
 }

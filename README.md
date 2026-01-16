@@ -223,7 +223,7 @@ Add to your NixOS configuration to enable the binary cache and install the apple
     ];
     trusted-public-keys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-      "cosmic-applet-package-updater.cachix.org-1:your-public-key-here"
+      "cosmic-applet-package-updater.cachix.org-1:34TyvdAddZx+Ngn9LhYRcsUB3yjgTuT+8VAuFW0WmcM="
     ];
   };
 
@@ -300,7 +300,7 @@ If you use Home Manager, add to your `home.nix`:
 }
 ```
 
-**Note**: Get the actual Cachix public key by running `cachix use cosmic-applet-package-updater` or from the Cachix dashboard at https://app.cachix.org/cache/cosmic-applet-package-updater
+**Note**: The Cachix public key is already included in the configurations above. If you need to verify it, run `cachix use cosmic-applet-package-updater` or visit https://app.cachix.org/cache/cosmic-applet-package-updater
 
 ### Build from Source
 
