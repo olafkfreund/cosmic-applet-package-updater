@@ -45,7 +45,7 @@ jobs:
         uses: cachix/cachix-action@v15
         with:
           name: cosmic-applet-package-updater
-          authToken: ${{ secrets.CACHIX_KEY }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           # Push to cachix on master/main branch only
           skipPush: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
 
@@ -94,7 +94,7 @@ jobs:
         uses: cachix/cachix-action@v15
         with:
           name: cosmic-applet-package-updater
-          authToken: ${{ secrets.CACHIX_KEY }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           skipPush: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
 
       - name: Run flake check
@@ -121,7 +121,7 @@ jobs:
         uses: cachix/cachix-action@v15
         with:
           name: cosmic-applet-package-updater
-          authToken: ${{ secrets.CACHIX_KEY }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           skipPush: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
 
       - name: Build development shell

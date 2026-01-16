@@ -73,10 +73,10 @@ Improved CI/CD workflows based on working patterns from cosmic-applet-music-play
 
 ### Required Secrets
 
-- **`CACHIX_KEY`**: Authentication token for Cachix
+- **`CACHIX_AUTH_TOKEN`**: Authentication token for Cachix
   - Get from: https://app.cachix.org
   - Add to: Repository Settings → Secrets → Actions
-  - Name: `CACHIX_KEY`
+  - Name: `CACHIX_AUTH_TOKEN`
   - Value: Your Cachix authentication token
 
 ### Cachix Cache
@@ -186,7 +186,7 @@ nix build .#checks.x86_64-linux.fmt --print-build-logs --show-trace
 ### Cachix push fails
 
 Make sure:
-1. `CACHIX_KEY` secret is set correctly
+1. `CACHIX_AUTH_TOKEN` secret is set correctly
 2. Cache name matches: `cosmic-applet-package-updater`
 3. Token has write permissions
 
