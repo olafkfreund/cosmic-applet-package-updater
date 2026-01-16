@@ -314,6 +314,7 @@ impl UpdateChecker {
         let file = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&lock_path)?;
 
         // Try to acquire an exclusive non-blocking lock
@@ -637,7 +638,7 @@ impl UpdateChecker {
             PackageManager::Apk => {
                 if line.contains("[upgradable from:") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 1 {
+                    if !parts.is_empty() {
                         // First part contains package-version, need to extract package name
                         let pkg_info = parts[0];
                         let name = if let Some(dash_idx) = pkg_info.rfind('-') {
@@ -699,7 +700,7 @@ impl UpdateChecker {
     /// Check if passwordless sudo is configured for the current user
     async fn check_passwordless_sudo() -> Result<bool> {
         let output = TokioCommand::new("sudo")
-            .args(&["-n", "true"]) // -n = non-interactive
+            .args(["-n", "true"]) // -n = non-interactive
             .output()
             .await?;
         Ok(output.status.success())
@@ -751,7 +752,7 @@ impl UpdateChecker {
 
         // Run nixos-rebuild dry-build with upgrade flag to show package statistics
         let output = TokioCommand::new("sudo")
-            .args(&["nixos-rebuild", "dry-build", "--upgrade"])
+            .args(["nixos-rebuild", "dry-build", "--upgrade"])
             .output()
             .await?;
 
@@ -851,13 +852,13 @@ impl UpdateChecker {
 
         // First, check for flake input updates using nix flake metadata
         let _metadata_output = TokioCommand::new("nix")
-            .args(&["flake", "metadata", "--json", config_path])
+            .args(["flake", "metadata", "--json", config_path])
             .output()
             .await;
 
         // Check what updates are available (dry-run)
         let update_check = TokioCommand::new("nix")
-            .args(&["flake", "update", "--dry-run", config_path])
+            .args(["flake", "update", "--dry-run", config_path])
             .output()
             .await;
 
@@ -878,7 +879,7 @@ impl UpdateChecker {
         // If we found flake input updates, also check what would be rebuilt
         if !all_updates.is_empty() {
             let rebuild_output = TokioCommand::new("nixos-rebuild")
-                .args(&["dry-build", "--flake", &format!("{}#", config_path)])
+                .args(["dry-build", "--flake", &format!("{}#", config_path)])
                 .output()
                 .await;
 

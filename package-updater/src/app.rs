@@ -188,7 +188,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
             let icon_button = self
                 .core
                 .applet
-                .icon_button(&self.get_icon_name())
+                .icon_button(self.get_icon_name())
                 .on_press(Message::TogglePopup);
 
             if self.update_info.has_updates() {
@@ -630,7 +630,7 @@ impl CosmicAppletPackageUpdater {
                 return;
             }
 
-            while let Some(_) = rx.next().await {
+            while (rx.next().await).is_some() {
                 // Small delay to avoid rapid fire events
                 tokio::time::sleep(tokio::time::Duration::from_millis(FILE_WATCHER_DEBOUNCE_MS)).await;
                 yield Message::SyncFileChanged;
@@ -1006,7 +1006,7 @@ impl CosmicAppletPackageUpdater {
         widgets.push(
             text_input("60", interval_value)
                 .on_input(|s| {
-                    Message::SetCheckInterval(s.parse::<u32>().unwrap_or(60).max(1).min(1440))
+                    Message::SetCheckInterval(s.parse::<u32>().unwrap_or(60).clamp(1, 1440))
                 })
                 .width(cosmic::iced::Length::Fill)
                 .into(),
