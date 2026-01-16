@@ -65,6 +65,7 @@ pub struct VirtualizedState {
     total_height: f32,
 }
 
+#[allow(dead_code)]
 impl VirtualizedState {
     /// Create new virtualized list state
     pub fn new() -> Self {
@@ -114,6 +115,8 @@ impl Default for VirtualizedState {
 }
 
 /// Configuration for virtualized list
+#[allow(dead_code)]
+#[allow(clippy::type_complexity)]
 pub struct VirtualizedList<'a, T, Message> {
     /// Items to display
     items: &'a [T],
@@ -134,6 +137,7 @@ pub struct VirtualizedList<'a, T, Message> {
     _phantom: PhantomData<Message>,
 }
 
+#[allow(dead_code)]
 impl<'a, T, Message> VirtualizedList<'a, T, Message>
 where
     Message: 'a,
@@ -256,6 +260,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 impl<'a, T, Message: 'a> Default for VirtualizedList<'a, T, Message> {
     fn default() -> Self {
         Self::new()
