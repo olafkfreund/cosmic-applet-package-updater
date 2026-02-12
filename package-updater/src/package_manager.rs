@@ -844,7 +844,11 @@ impl UpdateChecker {
         }
     }
 
-    async fn check_nixos_flakes(&self, config_path: &str) -> Result<Vec<PackageUpdate>> {
+    async fn check_nixos_flakes(
+        &self,
+        config: &crate::config::NixOSConfig,
+    ) -> Result<Vec<PackageUpdate>> {
+        let config_path = &config.config_path;
         let flake_lock_path = std::path::Path::new(config_path).join("flake.lock");
 
         // Check if flake.lock exists
@@ -857,13 +861,7 @@ impl UpdateChecker {
 
         let mut all_updates = Vec::new();
 
-        // First, check for flake input updates using nix flake metadata
-        let _metadata_output = TokioCommand::new("nix")
-            .args(["flake", "metadata", "--json", config_path])
-            .output()
-            .await;
-
-        // Check what updates are available (dry-run)
+        // Check what flake input updates are available (dry-run)
         let update_check = TokioCommand::new("nix")
             .args(["flake", "update", "--dry-run", config_path])
             .output()
@@ -874,30 +872,30 @@ impl UpdateChecker {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let combined = format!("{}\n{}", stdout, stderr);
 
-            // Check if already up to date
-            if combined.contains("up to date") || combined.contains("no updates") {
-                return Ok(Vec::new());
-            }
-
             let flake_updates = self.parse_flake_updates(&combined);
             all_updates.extend(flake_updates);
         }
 
-        // If we found flake input updates, also check what would be rebuilt
-        if !all_updates.is_empty() {
-            let rebuild_output = TokioCommand::new("nixos-rebuild")
-                .args(["dry-build", "--flake", &format!("{}#", config_path)])
-                .output()
-                .await;
+        // Build flake reference with optional hostname
+        let flake_ref = match &config.hostname {
+            Some(h) if !h.is_empty() => format!("{}#{}", config_path, h),
+            _ => format!("{}#", config_path),
+        };
 
-            if let Ok(output) = rebuild_output {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let combined_output = format!("{}\n{}", stdout, stderr);
+        // Always check what derivations would be rebuilt, even if flake inputs
+        // are unchanged -- local configuration changes also require rebuilding
+        let rebuild_output = TokioCommand::new("nixos-rebuild")
+            .args(["dry-build", "--flake", &flake_ref])
+            .output()
+            .await;
 
-                if let Ok(rebuild_updates) = self.parse_nixos_rebuild_output(&combined_output) {
-                    all_updates.extend(rebuild_updates);
-                }
+        if let Ok(output) = rebuild_output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined_output = format!("{}\n{}", stdout, stderr);
+
+            if let Ok(rebuild_updates) = self.parse_nixos_rebuild_output(&combined_output) {
+                all_updates.extend(rebuild_updates);
             }
         }
 
@@ -906,60 +904,98 @@ impl UpdateChecker {
 
     fn parse_nixos_rebuild_output(&self, output: &str) -> Result<Vec<PackageUpdate>> {
         let mut updates = Vec::new();
-
-        // Count packages that will be built
-        // Look for lines like: "these X derivations will be built:"
-        let mut packages_to_build = 0;
-        let mut packages_to_fetch = 0;
+        let mut in_build_section = false;
+        let mut in_fetch_section = false;
 
         for line in output.lines() {
-            // Match: "these 47 derivations will be built:"
+            // Detect section headers
             if line.contains("derivations will be built")
                 || line.contains("derivation will be built")
             {
-                if let Some(num_str) = line.split_whitespace().nth(1) {
-                    if let Ok(num) = num_str.parse::<usize>() {
-                        packages_to_build = num;
-                    }
-                }
+                in_build_section = true;
+                in_fetch_section = false;
+                continue;
             }
-            // Match: "these 23 paths will be fetched"
             if line.contains("paths will be fetched") || line.contains("path will be fetched") {
-                if let Some(num_str) = line.split_whitespace().nth(1) {
-                    if let Ok(num) = num_str.parse::<usize>() {
-                        packages_to_fetch = num;
-                    }
+                in_build_section = false;
+                in_fetch_section = true;
+                continue;
+            }
+
+            // Parse individual store paths (indented lines starting with /nix/store/)
+            let trimmed = line.trim();
+            if trimmed.starts_with("/nix/store/") && (in_build_section || in_fetch_section) {
+                if let Some(update) =
+                    Self::parse_nix_store_path(trimmed, if in_build_section { "build" } else { "fetch" })
+                {
+                    updates.push(update);
                 }
+                continue;
+            }
+
+            // A non-indented, non-empty line ends the current section
+            if !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+                in_build_section = false;
+                in_fetch_section = false;
             }
         }
 
-        // If we found updates, create summary entries
-        if packages_to_build > 0 || packages_to_fetch > 0 {
-            if packages_to_build > 0 {
-                updates.push(PackageUpdate {
-                    name: "System Update".to_string(),
-                    current_version: format!("{} packages", packages_to_build),
-                    new_version: "will be built".to_string(),
-                    is_aur: false,
-                });
-            }
-
-            if packages_to_fetch > 0 {
-                updates.push(PackageUpdate {
-                    name: "Downloads".to_string(),
-                    current_version: format!("{} packages", packages_to_fetch),
-                    new_version: "will be fetched".to_string(),
-                    is_aur: false,
-                });
-            }
-        } else {
-            // Check if system is up to date
-            if output.contains("up to date") || output.contains("already built") {
-                return Ok(Vec::new());
-            }
+        // If no individual derivations were found, check if system is up to date
+        if updates.is_empty()
+            && (output.contains("up to date") || output.contains("already built"))
+        {
+            return Ok(Vec::new());
         }
 
         Ok(updates)
+    }
+
+    /// Parse a nix store path into a package name and version.
+    ///
+    /// Store paths follow the format: `/nix/store/<32-char-hash>-<name>-<version>.drv`
+    /// The version is the trailing hyphen-separated segments that start with a digit.
+    fn parse_nix_store_path(path: &str, action: &str) -> Option<PackageUpdate> {
+        // Strip /nix/store/<hash>- prefix (hash is 32 chars)
+        let after_store = path.strip_prefix("/nix/store/")?;
+
+        // The hash is 32 lowercase hex chars followed by a hyphen
+        if after_store.len() < 34 || after_store.as_bytes()[32] != b'-' {
+            return None;
+        }
+        let name_version = &after_store[33..];
+
+        // Strip .drv suffix if present
+        let name_version = name_version.strip_suffix(".drv").unwrap_or(name_version);
+
+        // Split on hyphens and find where the version starts.
+        // Version segments start with a digit (e.g., "6.1.0", "26.05.20260208").
+        let parts: Vec<&str> = name_version.split('-').collect();
+        let version_start = parts
+            .iter()
+            .position(|p| p.starts_with(|c: char| c.is_ascii_digit()));
+
+        let (name, version) = match version_start {
+            Some(0) => {
+                // Entire string is version-like, use the full thing as name
+                (name_version.to_string(), "unknown".to_string())
+            }
+            Some(idx) => {
+                let name = parts[..idx].join("-");
+                let version = parts[idx..].join("-");
+                (name, version)
+            }
+            None => {
+                // No version segment found
+                (name_version.to_string(), action.to_string())
+            }
+        };
+
+        Some(PackageUpdate {
+            name,
+            current_version: "unknown".to_string(),
+            new_version: version,
+            is_aur: false,
+        })
     }
 
     async fn check_nixos_updates(
@@ -968,7 +1004,7 @@ impl UpdateChecker {
     ) -> Result<Vec<PackageUpdate>> {
         match config.mode {
             crate::config::NixOSMode::Channels => self.check_nixos_channels().await,
-            crate::config::NixOSMode::Flakes => self.check_nixos_flakes(&config.config_path).await,
+            crate::config::NixOSMode::Flakes => self.check_nixos_flakes(config).await,
         }
     }
 }
@@ -1074,14 +1110,21 @@ mod tests {
     #[test]
     fn test_parse_nixos_rebuild_output() {
         let checker = UpdateChecker::new(PackageManager::NixOS);
-        let output = "these 47 derivations will be built:\n  /nix/store/abc...\nthese 23 paths will be fetched (15.2 MiB download, 89.3 MiB unpacked):";
+        let output = "\
+these 2 derivations will be built:
+  /nix/store/abcdefghijklmnopqrstuvwxyz012345-firefox-120.0.1.drv
+  /nix/store/abcdefghijklmnopqrstuvwxyz012345-system-units.drv
+these 1 paths will be fetched (15.2 MiB download, 89.3 MiB unpacked):
+  /nix/store/abcdefghijklmnopqrstuvwxyz012345-glibc-2.39
+";
         let updates = checker.parse_nixos_rebuild_output(output).unwrap();
 
-        assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].name, "System Update");
-        assert!(updates[0].current_version.contains("47"));
-        assert_eq!(updates[1].name, "Downloads");
-        assert!(updates[1].current_version.contains("23"));
+        assert_eq!(updates.len(), 3);
+        assert_eq!(updates[0].name, "firefox");
+        assert_eq!(updates[0].new_version, "120.0.1");
+        assert_eq!(updates[1].name, "system-units");
+        assert_eq!(updates[2].name, "glibc");
+        assert_eq!(updates[2].new_version, "2.39");
     }
 
     #[test]
@@ -1179,6 +1222,131 @@ mod tests {
 
         // Cleanup
         fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_parse_nix_store_path_with_version() {
+        let update = UpdateChecker::parse_nix_store_path(
+            "/nix/store/87g71cisdzc9k7izm28f5n6w6icm4rhw-nixos-system-p620-26.05.20260208.d6c7193.drv",
+            "build",
+        )
+        .unwrap();
+        assert_eq!(update.name, "nixos-system-p620");
+        assert_eq!(update.new_version, "26.05.20260208.d6c7193");
+    }
+
+    #[test]
+    fn test_parse_nix_store_path_without_version() {
+        let update = UpdateChecker::parse_nix_store_path(
+            "/nix/store/mv9bgdz6p12nxyb86nf601932klbqbqk-home-manager-path.drv",
+            "build",
+        )
+        .unwrap();
+        assert_eq!(update.name, "home-manager-path");
+        assert_eq!(update.new_version, "build");
+    }
+
+    #[test]
+    fn test_parse_nix_store_path_simple_versioned() {
+        let update = UpdateChecker::parse_nix_store_path(
+            "/nix/store/abcdefghijklmnopqrstuvwxyz012345-firefox-120.0.1.drv",
+            "build",
+        )
+        .unwrap();
+        assert_eq!(update.name, "firefox");
+        assert_eq!(update.new_version, "120.0.1");
+    }
+
+    #[test]
+    fn test_parse_nix_store_path_fetch_action() {
+        let update = UpdateChecker::parse_nix_store_path(
+            "/nix/store/abcdefghijklmnopqrstuvwxyz012345-glibc-2.39",
+            "fetch",
+        )
+        .unwrap();
+        assert_eq!(update.name, "glibc");
+        assert_eq!(update.new_version, "2.39");
+    }
+
+    #[test]
+    fn test_parse_nixos_rebuild_output_individual_packages() {
+        let checker = UpdateChecker::new(PackageManager::NixOS);
+        let output = "\
+these 3 derivations will be built:
+  /nix/store/mv9bgdz6p12nxyb86nf601932klbqbqk-home-manager-path.drv
+  /nix/store/abcdefghijklmnopqrstuvwxyz012345-firefox-120.0.1.drv
+  /nix/store/87g71cisdzc9k7izm28f5n6w6icm4rhw-nixos-system-p620-26.05.20260208.d6c7193.drv
+";
+        let updates = checker.parse_nixos_rebuild_output(output).unwrap();
+        assert_eq!(updates.len(), 3);
+        assert_eq!(updates[0].name, "home-manager-path");
+        assert_eq!(updates[1].name, "firefox");
+        assert_eq!(updates[1].new_version, "120.0.1");
+        assert_eq!(updates[2].name, "nixos-system-p620");
+        assert_eq!(updates[2].new_version, "26.05.20260208.d6c7193");
+    }
+
+    #[test]
+    fn test_parse_nixos_rebuild_output_with_fetch_section() {
+        let checker = UpdateChecker::new(PackageManager::NixOS);
+        let output = "\
+these 2 derivations will be built:
+  /nix/store/abcdefghijklmnopqrstuvwxyz012345-home-manager-path.drv
+  /nix/store/abcdefghijklmnopqrstuvwxyz012345-system-units.drv
+these 1 paths will be fetched (10.5 MiB download, 30.2 MiB unpacked):
+  /nix/store/abcdefghijklmnopqrstuvwxyz012345-glibc-2.39
+";
+        let updates = checker.parse_nixos_rebuild_output(output).unwrap();
+        assert_eq!(updates.len(), 3);
+        assert_eq!(updates[0].name, "home-manager-path");
+        assert_eq!(updates[1].name, "system-units");
+        assert_eq!(updates[2].name, "glibc");
+        assert_eq!(updates[2].new_version, "2.39");
+    }
+
+    #[test]
+    fn test_parse_nixos_rebuild_output_up_to_date() {
+        let checker = UpdateChecker::new(PackageManager::NixOS);
+        let output = "system is up to date\n";
+        let updates = checker.parse_nixos_rebuild_output(output).unwrap();
+        assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn test_parse_nixos_rebuild_real_output() {
+        let checker = UpdateChecker::new(PackageManager::NixOS);
+        // Real output from nixos-rebuild dry-build with evaluation warnings
+        let output = "\
+building the system configuration...
+evaluation warning: The xorg package set has been deprecated
+evaluation warning: olafkfreund profile: stylix: qt: unsupported
+these 10 derivations will be built:
+  /nix/store/mv9bgdz6p12nxyb86nf601932klbqbqk-home-manager-path.drv
+  /nix/store/sq4n9d9kyvvqmqg84yf88bxj1rvq9brh-hm_fontconfigconf.d10hmfonts.conf.drv
+  /nix/store/asgyi71bg7isshiybnzl83p5rwxv07al-home-manager-files.drv
+  /nix/store/vjvlqsij4n0fx5b2y6s3x36rllk5fw1h-home-manager-generation.drv
+  /nix/store/rfs1aspyik78y54i9ypvbrmz31aq26l2-unit-home-manager-olafkfreund.service.drv
+  /nix/store/2413gikjvkvcl03ngxygghx60j60dpb1-system-units.drv
+  /nix/store/x23jf6kwh54cagp3yprha7v5kk6hw2bz-user-environment.drv
+  /nix/store/viv41ydf4gp6vyc6xy4dghg5zc8nfw8i-etc.drv
+  /nix/store/qhap4ys9rqdgrv2idxm0cngvixdszyir-activate.drv
+  /nix/store/87g71cisdzc9k7izm28f5n6w6icm4rhw-nixos-system-p620-26.05.20260208.d6c7193.drv
+";
+        let updates = checker.parse_nixos_rebuild_output(output).unwrap();
+        assert_eq!(updates.len(), 10);
+
+        // Verify specific entries
+        assert_eq!(updates[0].name, "home-manager-path");
+        assert_eq!(updates[0].new_version, "build");
+
+        assert_eq!(updates[1].name, "hm_fontconfigconf.d10hmfonts.conf");
+        assert_eq!(updates[1].new_version, "build");
+
+        assert_eq!(updates[4].name, "unit-home-manager-olafkfreund.service");
+        assert_eq!(updates[4].new_version, "build");
+
+        assert_eq!(updates[9].name, "nixos-system-p620");
+        assert_eq!(updates[9].new_version, "26.05.20260208.d6c7193");
     }
 
     // Integration tests for lock mechanism
