@@ -80,7 +80,7 @@
           inherit cargoArtifacts;
 
           pname = "cosmic-ext-applet-package-updater";
-          version = "1.0.0";
+          version = "1.3.0";
 
           # Skip tests during build - they require file I/O which conflicts with Nix sandbox
           doCheck = false;

@@ -1,6 +1,6 @@
 # Package Updater Applet for COSMIC™
 
-**Version**: 1.3.0-alpha | **Status**: Production Ready + Future Enhancements 🚀
+**Version**: 1.3.0 | **Status**: Production Ready
 
 A lightweight and efficient package update notifier applet for the COSMIC™ desktop. Stay informed about system updates with real-time notifications and seamless integration into your COSMIC panel.
 
@@ -10,7 +10,7 @@ Supports multiple Linux distributions including Arch Linux, Debian/Ubuntu, Fedor
 
 ## Features
 
-### 📦 **Package Manager Support**
+### Package Manager Support
 - **Arch Linux**: Pacman, Paru, Yay (with AUR support)
 - **Debian/Ubuntu/Pop!_OS**: APT
 - **Fedora/RHEL**: DNF
@@ -20,26 +20,28 @@ Supports multiple Linux distributions including Arch Linux, Debian/Ubuntu, Fedor
 - **Universal**: Flatpak
 - **Auto-detection**: Automatically discovers available package managers on first launch
 
-### 🔄 **Update Management**
+### Update Management
 - **Visual Indicators**: Panel icon changes based on update status
-  - ✅ Package icon: System up to date
-  - 🎁 Update icon with count: Updates available
-  - ⏳ Refresh spinner: Checking for updates
-  - ❌ Error icon: Error occurred
+  - Package icon: System up to date
+  - Update icon with count: Updates available
+  - Refresh icon: Checking for updates
+  - Error icon: Error occurred
 - **Automatic Checking**: Configurable interval-based update checking (default: 60 minutes)
 - **One-Click Updates**: Launch system updates directly from the applet in your preferred terminal
 - **Detailed Package List**: View all available updates with version information (AUR packages shown separately on Arch-based systems)
 - **Instance Synchronization**: Multiple applet instances stay in sync automatically
 
-### 🎨 **User Interface**
-- **Clean Two-Tab Layout**:
+### User Interface
+- **Clean Two-Tab Layout** with proper COSMIC button styling:
   - **Updates Tab**: Shows update status, package list, and action buttons
   - **Settings Tab**: Configure all preferences in one place
-- **Visual Package Illustration**: Dynamic icon and emoji showing current status
+- **COSMIC Radio Widgets**: Native radio buttons for package manager and NixOS mode selection
+- **Visual Package Illustration**: Dynamic icon showing current status
+- **Explicit State Machine**: `CheckState` enum tracks Idle/Checking/Completed/Error states cleanly
 - **Smart Button Placement**: Update System button appears only when updates are available
-- **Scrollable Package List**: View all updates in an organized, easy-to-read format
+- **Scrollable Package List**: View all updates in an organized, themed list container
 
-### ⚙️ **Configuration Options**
+### Configuration Options
 - **Package Manager Selection**: Choose from detected package managers
 - **Check Interval**: Set how often to check for updates (1-1440 minutes)
 - **Auto-check on Startup**: Automatically check for updates when applet starts
@@ -47,13 +49,14 @@ Supports multiple Linux distributions including Arch Linux, Debian/Ubuntu, Fedor
 - **Show Notifications**: Enable/disable update notifications (feature ready)
 - **Show Update Count**: Display the number of updates in the panel icon
 - **Preferred Terminal**: Set your preferred terminal emulator (default: cosmic-term)
+- **NixOS Hostname**: Configure hostname for multi-host flake setups (with auto-detect)
 
-### ⌨️ **Quick Actions**
+### Quick Actions
 - **Left Click**: Open the applet popup window
 - **Middle Click on Panel Icon**: Launch system update directly
 - **Update System Button**: Opens terminal with update command, then automatically re-checks
 
-### 🔧 **Smart Background Operations**
+### Smart Background Operations
 - **File-Based Locking**: Prevents multiple instances from checking simultaneously
 - **Automatic Retry Logic**: Retries failed checks once to handle temporary errors
 - **File Watcher Sync**: When one instance checks for updates, all others sync within 100ms
@@ -70,9 +73,9 @@ Supports multiple Linux distributions including Arch Linux, Debian/Ubuntu, Fedor
 ![Settings](screenshots/Package-Updater-Settings.png)
 *Configure package manager, intervals, and preferences*
 
-## 📚 Documentation
+## Documentation
 
-**Version**: 1.2.0 - Production Ready ✅
+**Version**: 1.3.0
 
 Comprehensive documentation is available for all aspects of the applet:
 
@@ -116,9 +119,9 @@ Comprehensive documentation is available for all aspects of the applet:
 
 ### Release Information
 - **[CHANGES.md](CHANGES.md)** - Complete changelog
+  - v1.3.0: CheckState enum, hostname UI, radio widgets, dead code removal
   - v1.2.0: PolicyKit integration, integration tests
   - v1.1.0: Security fixes, comprehensive testing
-  - Detailed fix descriptions with code examples
 
 - **[REVIEW_SUMMARY.md](REVIEW_SUMMARY.md)** - Security audit summary
 - **[VERSION_1.2.0_SUMMARY.md](VERSION_1.2.0_SUMMARY.md)** - v1.2.0 release notes
@@ -126,56 +129,33 @@ Comprehensive documentation is available for all aspects of the applet:
 - **[FINAL_SUMMARY.md](FINAL_SUMMARY.md)** - Complete session summary
 
 ### For Planning & Future Development
-- **[ROADMAP.md](ROADMAP.md)** - 3-year development roadmap
-  - v1.3.0: Performance & UX enhancements
+- **[ROADMAP.md](ROADMAP.md)** - Development roadmap
   - v1.4.0: Extended package manager support
-  - v1.5.0: Real-time updates with WebSocket
+  - v1.5.0: Real-time updates
   - v2.0.0: Intelligence & automation
-  - Community features and long-term vision
 
-- **[VIRTUALIZATION.md](VIRTUALIZATION.md)** - Virtualized rendering documentation
-  - Performance benefits and implementation
-  - Scaling to 1000+ packages
-  - API reference and usage examples
-  - Performance benchmarks
+### Key Features (v1.3.0)
 
-### Key Features (v1.3.0-alpha)
-
-🔐 **Security**:
+**Security**:
 - Zero critical vulnerabilities
 - PolicyKit integration for secure privilege escalation
 - Fine-grained per-action permissions
-- Command injection prevention
-- Atomic file locking
-- Executable path validation
+- Command injection prevention with `shell-escape`
+- Atomic `flock`-based file locking
+- Executable path validation (system dirs only)
 
-🧪 **Testing**:
-- 25+ comprehensive tests (18 unit + 7+ integration)
-- 65% test coverage
-- Async concurrency testing
+**Testing**:
+- 25+ comprehensive tests (18 unit + 7 integration)
+- Async concurrency testing with tokio
 - Lock mechanism verification
-- Virtualization performance tests
 
-🚀 **Performance**:
-- Virtualized list rendering for 1000+ packages
-- Maintains 60 FPS with any package count
-- 96% memory savings on large lists
-- Automatic threshold-based activation
-- Smooth scrolling guaranteed
-
-📖 **Documentation**:
-- 6500+ lines of professional documentation
-- Complete guides for users, developers, and admins
-- 3-year development roadmap
-- Performance profiling and virtualization guides
-- Troubleshooting and best practices
-
-📅 **Future Planning**:
-- Comprehensive 3-year roadmap
-- v1.3.0: Performance & UX enhancements
-- v1.4.0: Extended package manager support (Gentoo, Void, Snap)
-- v1.5.0: Real-time updates with WebSocket
-- v2.0.0: ML-based recommendations and automation
+**Code Quality** (v1.3.0):
+- `CheckState` enum replaces implicit boolean/option state fields
+- Native COSMIC `radio` widgets for all selection UI
+- `update_config()` DRY helper eliminates repetitive config mutation
+- `LazyLock` for compiled regex (Rust 1.80+, no `once_cell`)
+- Shared `paths` module for XDG runtime dir helpers
+- Removed 387 lines of dead code (unused `virtualized_list` module + 5 unused dependencies)
 
 ## Installation
 
@@ -278,10 +258,10 @@ Add to your NixOS configuration to enable the binary cache and install the apple
 ```
 
 **Benefits of using Cachix:**
-- ⚡ **Fast installations**: Pre-built binaries, no compilation needed
-- 🔄 **Automatic updates**: Same binaries used in CI/CD
-- 💾 **Reduced disk usage**: Shared dependencies across packages
-- 🌐 **CDN distribution**: Fast downloads from anywhere
+- **Fast installations**: Pre-built binaries, no compilation needed
+- **Automatic updates**: Same binaries used in CI/CD
+- **Reduced disk usage**: Shared dependencies across packages
+- **CDN distribution**: Fast downloads from anywhere
 
 #### Home Manager Configuration
 
@@ -482,9 +462,10 @@ The applet now fully supports NixOS with both traditional channels and modern fl
 
 **Configuration:**
 1. Select "nixos" from Package Managers in Settings
-2. Choose your mode: Flakes or Channels
+2. Choose your mode: Flakes or Channels (radio buttons)
 3. Set your NixOS configuration path (default: `/etc/nixos`)
-4. Click "Auto-detect Mode" to automatically detect your setup based on presence of `flake.nix`
+4. Set hostname for multi-host flake setups (or click "Detect" to auto-detect from `/etc/hostname`)
+5. Click "Auto-detect Mode" to automatically detect your setup based on presence of `flake.nix`
 
 **Requirements:**
 - NixOS system with `nixos-rebuild` available
@@ -512,7 +493,7 @@ your_username ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/nixos-rebuild
 
 **Update Command:**
 - **Channels**: `sudo nix-channel --update && sudo nixos-rebuild switch --upgrade`
-- **Flakes**: `cd <config_path> && nix flake update && sudo nixos-rebuild switch --flake .#`
+- **Flakes**: `cd <config_path> && nix flake update && sudo nixos-rebuild switch --flake .#<hostname>`
 
 **Note on Update Display:**
 - NixOS is declarative, so instead of showing individual package updates like other distributions, the applet shows:
@@ -525,7 +506,7 @@ your_username ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/nixos-rebuild
 - **Exit Code Handling**: Correctly interprets exit codes (2 for checkupdates, 1 for paru/yay means no updates)
 - **File-Based Locking**: Uses `$XDG_RUNTIME_DIR/cosmic-package-updater.lock` to prevent simultaneous checks
 - **File Watcher Sync**: Monitors `$XDG_RUNTIME_DIR/cosmic-package-updater.sync` to sync instances
-- **Debouncing**: 3-second minimum between syncs to prevent rapid repeated checks
+- **Debouncing**: 10-second minimum between syncs to prevent rapid repeated checks
 
 ## Technical Details
 

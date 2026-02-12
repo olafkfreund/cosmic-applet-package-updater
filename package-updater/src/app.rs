@@ -4,7 +4,7 @@ use cosmic::iced::platform_specific::shell::wayland::commands::popup::{destroy_p
 use cosmic::iced::window;
 use cosmic::iced::{time, window::Id, Limits, Subscription};
 use cosmic::widget::{
-    autosize, button, column, divider, horizontal_space, row, scrollable, text, text_input,
+    autosize, button, column, divider, horizontal_space, radio, row, scrollable, text, text_input,
     toggler, Space,
 };
 use cosmic::Element;
@@ -37,19 +37,23 @@ pub struct CosmicAppletPackageUpdater {
     config: PackageUpdaterConfig,
     config_handler: Config,
     update_info: UpdateInfo,
-    last_check: Option<Instant>,
-    checking_updates: bool,
-    error_message: Option<String>,
+    check_state: CheckState,
     available_package_managers: Vec<PackageManager>,
     ignore_next_sync: bool,
-    #[allow(dead_code)]
-    virtualized_list_state: crate::virtualized_list::VirtualizedState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopupTab {
     Updates,
     Settings,
+}
+
+#[derive(Debug, Clone)]
+pub enum CheckState {
+    Idle,
+    Checking,
+    Completed { at: Instant },
+    Error { message: String, at: Option<Instant> },
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +80,8 @@ pub enum Message {
     SetNixOSMode(NixOSMode),
     SetNixOSConfigPath(String),
     AutoDetectNixOSMode,
+    SetNixOSHostname(String),
+    AutoDetectNixOSHostname,
 }
 
 impl cosmic::Application for CosmicAppletPackageUpdater {
@@ -108,12 +114,9 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
             config,
             config_handler,
             update_info: UpdateInfo::new(),
-            last_check: None,
-            checking_updates: false,
-            error_message: None,
+            check_state: CheckState::Idle,
             available_package_managers,
             ignore_next_sync: true,
-            virtualized_list_state: crate::virtualized_list::VirtualizedState::new(),
         };
 
         let mut tasks = vec![];
@@ -207,19 +210,23 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
         } = cosmic::theme::active().cosmic().spacing;
 
         // Tab bar
-        let updates_button = button::text(if self.active_tab == PopupTab::Updates {
-            "● Updates"
+        let updates_button = if self.active_tab == PopupTab::Updates {
+            button::text("Updates")
+                .class(cosmic::theme::Button::Suggested)
+                .on_press(Message::SwitchTab(PopupTab::Updates))
         } else {
-            "○ Updates"
-        })
-        .on_press(Message::SwitchTab(PopupTab::Updates));
+            button::text("Updates")
+                .on_press(Message::SwitchTab(PopupTab::Updates))
+        };
 
-        let settings_button = button::text(if self.active_tab == PopupTab::Settings {
-            "● Settings"
+        let settings_button = if self.active_tab == PopupTab::Settings {
+            button::text("Settings")
+                .class(cosmic::theme::Button::Suggested)
+                .on_press(Message::SwitchTab(PopupTab::Settings))
         } else {
-            "○ Settings"
-        })
-        .on_press(Message::SwitchTab(PopupTab::Settings));
+            button::text("Settings")
+                .on_press(Message::SwitchTab(PopupTab::Settings))
+        };
 
         let tabs = row()
             .width(cosmic::iced::Length::Fill)
@@ -233,27 +240,15 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
             PopupTab::Settings => self.view_settings_tab(),
         };
 
-        // Package illustration - dynamic based on update status
-        let (icon_name, emoji) = if self.checking_updates {
-            ("view-refresh-symbolic", "⏳")
-        } else if self.update_info.has_updates() {
-            ("software-update-available-symbolic", "🎁")
-        } else {
-            ("package-x-generic", "✅")
-        };
-
-        let status_text = if self.checking_updates {
-            text("Checking...")
-                .size(11)
-                .align_x(cosmic::iced::Alignment::Center)
-        } else if self.update_info.has_updates() {
-            text(format!("{} Updates", self.update_info.total_updates))
-                .size(11)
-                .align_x(cosmic::iced::Alignment::Center)
-        } else {
-            text("Up to Date")
-                .size(11)
-                .align_x(cosmic::iced::Alignment::Center)
+        // Package illustration - dynamic based on check state
+        let (icon_name, status_label) = match &self.check_state {
+            CheckState::Checking => ("view-refresh-symbolic", "Checking...".to_string()),
+            CheckState::Error { .. } => ("dialog-error-symbolic", "Error".to_string()),
+            _ if self.update_info.has_updates() => (
+                "software-update-available-symbolic",
+                format!("{} Updates", self.update_info.total_updates),
+            ),
+            _ => ("package-x-generic", "Up to Date".to_string()),
         };
 
         let package_illustration = cosmic::widget::container(
@@ -261,8 +256,11 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 .align_x(cosmic::iced::Alignment::Center)
                 .spacing(12)
                 .push(cosmic::widget::icon::from_name(icon_name).size(48))
-                .push(text(emoji).size(28))
-                .push(status_text),
+                .push(
+                    text(status_label)
+                        .size(11)
+                        .align_x(cosmic::iced::Alignment::Center),
+                ),
         )
         .width(cosmic::iced::Length::Fixed(ILLUSTRATION_WIDTH))
         .height(cosmic::iced::Length::Fixed(ILLUSTRATION_HEIGHT))
@@ -312,8 +310,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
             Message::SwitchTab(tab) => self.handle_switch_tab(tab),
             Message::CheckForUpdates => {
                 if let Some(pm) = self.config.package_manager {
-                    self.checking_updates = true;
-                    self.error_message = None;
+                    self.check_state = CheckState::Checking;
                     let checker = UpdateChecker::new(pm);
                     let include_aur = self.config.include_aur_updates;
                     let nixos_config = self.config.nixos_config.clone();
@@ -329,20 +326,24 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 Task::none()
             }
             Message::UpdatesChecked(result) => {
-                self.checking_updates = false;
                 match result {
                     Ok(update_info) => {
                         self.update_info = update_info;
-                        self.last_check = Some(Instant::now());
-                        self.error_message = None;
+                        self.check_state = CheckState::Completed { at: Instant::now() };
                     }
                     Err(error) => {
+                        let last_check = match &self.check_state {
+                            CheckState::Completed { at } => Some(*at),
+                            CheckState::Error { at, .. } => *at,
+                            _ => None,
+                        };
                         // Handle specific Wayland errors that might occur after system updates
-                        if error.contains("Protocol error") || error.contains("wl_surface") {
-                            self.error_message = Some("Display system updated. Please restart the applet if issues persist.".to_string());
+                        let message = if error.contains("Protocol error") || error.contains("wl_surface") {
+                            "Display system updated. Please restart the applet if issues persist.".to_string()
                         } else {
-                            self.error_message = Some(error);
-                        }
+                            error
+                        };
+                        self.check_state = CheckState::Error { message, at: last_check };
                     }
                 }
                 Task::none()
@@ -447,7 +448,7 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
             Message::Timer => {
                 // Automatically check for updates if a package manager is configured
                 // and we're not already checking
-                if !self.checking_updates && self.config.package_manager.is_some() {
+                if !matches!(self.check_state, CheckState::Checking) && self.config.package_manager.is_some() {
                     Task::done(cosmic::Action::App(Message::CheckForUpdates))
                 } else {
                     Task::none()
@@ -482,39 +483,25 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 }
             }
             Message::SelectPackageManager(pm) => {
-                let mut config = self.config.clone();
-                config.package_manager = Some(pm);
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.package_manager = Some(pm))
             }
             Message::SetCheckInterval(interval) => {
-                let mut config = self.config.clone();
-                config.check_interval_minutes = interval;
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.check_interval_minutes = interval)
             }
             Message::ToggleAutoCheck(enabled) => {
-                let mut config = self.config.clone();
-                config.auto_check_on_startup = enabled;
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.auto_check_on_startup = enabled)
             }
             Message::ToggleIncludeAur(enabled) => {
-                let mut config = self.config.clone();
-                config.include_aur_updates = enabled;
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.include_aur_updates = enabled)
             }
             Message::ToggleShowNotifications(enabled) => {
-                let mut config = self.config.clone();
-                config.show_notifications = enabled;
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.show_notifications = enabled)
             }
             Message::ToggleShowUpdateCount(enabled) => {
-                let mut config = self.config.clone();
-                config.show_update_count = enabled;
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.show_update_count = enabled)
             }
             Message::SetPreferredTerminal(terminal) => {
-                let mut config = self.config.clone();
-                config.preferred_terminal = terminal;
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.preferred_terminal = terminal)
             }
             Message::SyncFileChanged => {
                 // Ignore the first sync event on startup (file creation triggers watcher)
@@ -525,9 +512,14 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
 
                 // Another instance completed an update check, sync our state
                 // Only sync if we're not already checking and haven't checked very recently
-                if !self.checking_updates && self.config.package_manager.is_some() {
-                    let should_sync = self.last_check.map_or(true, |last| {
-                        last.elapsed().as_secs() > SYNC_DEBOUNCE_SECS // Only sync if our last check was more than threshold ago
+                if !matches!(self.check_state, CheckState::Checking) && self.config.package_manager.is_some() {
+                    let last_check_at = match &self.check_state {
+                        CheckState::Completed { at } => Some(*at),
+                        CheckState::Error { at, .. } => *at,
+                        _ => None,
+                    };
+                    let should_sync = last_check_at.map_or(true, |last| {
+                        last.elapsed().as_secs() > SYNC_DEBOUNCE_SECS
                     });
 
                     if should_sync {
@@ -540,22 +532,27 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
                 }
             }
             Message::SetNixOSMode(mode) => {
-                let mut config = self.config.clone();
-                config.nixos_config.mode = mode;
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.nixos_config.mode = mode)
             }
             Message::SetNixOSConfigPath(path) => {
-                let mut config = self.config.clone();
-                config.nixos_config.config_path = path;
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.nixos_config.config_path = path)
             }
             Message::AutoDetectNixOSMode => {
                 let config_path = self.config.nixos_config.config_path.clone();
                 let detected_mode = PackageManagerDetector::detect_nixos_mode(&config_path);
-
-                let mut config = self.config.clone();
-                config.nixos_config.mode = detected_mode;
-                Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+                self.update_config(|c| c.nixos_config.mode = detected_mode)
+            }
+            Message::SetNixOSHostname(hostname) => {
+                let hostname = if hostname.trim().is_empty() {
+                    None
+                } else {
+                    Some(hostname)
+                };
+                self.update_config(|c| c.nixos_config.hostname = hostname)
+            }
+            Message::AutoDetectNixOSHostname => {
+                let detected = crate::config::detect_hostname();
+                self.update_config(|c| c.nixos_config.hostname = detected)
             }
         }
     }
@@ -586,9 +583,15 @@ impl cosmic::Application for CosmicAppletPackageUpdater {
 }
 
 impl CosmicAppletPackageUpdater {
+    /// Helper to update a single config field and dispatch ConfigChanged
+    fn update_config(&self, f: impl FnOnce(&mut PackageUpdaterConfig)) -> Task<Message> {
+        let mut config = self.config.clone();
+        f(&mut config);
+        Task::done(cosmic::Action::App(Message::ConfigChanged(config)))
+    }
+
     fn get_sync_path() -> PathBuf {
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-        PathBuf::from(runtime_dir).join("cosmic-package-updater.sync")
+        crate::paths::sync_path()
     }
 
     fn watch_sync_file() -> impl futures::Stream<Item = Message> {
@@ -659,7 +662,15 @@ impl CosmicAppletPackageUpdater {
                 Task::batch(vec![get_popup(popup_settings), window::gain_focus(new_id)])
             } else {
                 eprintln!("Failed to get main window ID for popup");
-                self.error_message = Some("Unable to open popup window".to_string());
+                let at = match &self.check_state {
+                    CheckState::Completed { at } => Some(*at),
+                    CheckState::Error { at, .. } => *at,
+                    _ => None,
+                };
+                self.check_state = CheckState::Error {
+                    message: "Unable to open popup window".to_string(),
+                    at,
+                };
                 Task::none()
             }
         }
@@ -679,14 +690,11 @@ impl CosmicAppletPackageUpdater {
     }
 
     fn get_icon_name(&self) -> &'static str {
-        if self.checking_updates {
-            "view-refresh-symbolic"
-        } else if self.error_message.is_some() {
-            "dialog-error-symbolic"
-        } else if self.update_info.has_updates() {
-            "software-update-available-symbolic"
-        } else {
-            "package-x-generic-symbolic"
+        match &self.check_state {
+            CheckState::Checking => "view-refresh-symbolic",
+            CheckState::Error { .. } => "dialog-error-symbolic",
+            _ if self.update_info.has_updates() => "software-update-available-symbolic",
+            _ => "package-x-generic-symbolic",
         }
     }
 
@@ -707,44 +715,54 @@ impl CosmicAppletPackageUpdater {
     fn build_status_section(&self) -> Vec<Element<'_, Message>> {
         let mut widgets = vec![];
 
-        // Status text
-        if self.checking_updates {
-            widgets.push(text("Checking for updates...").size(18).into());
-        } else if let Some(error) = &self.error_message {
-            widgets.push(text(format!("Error: {}", error)).size(18).into());
-        } else if self.update_info.has_updates() {
-            widgets.push(
-                text(format!(
-                    "{} updates available",
-                    self.update_info.total_updates
-                ))
-                .size(18)
-                .into(),
-            );
+        // Status text based on check state
+        match &self.check_state {
+            CheckState::Checking => {
+                widgets.push(text("Checking for updates...").size(18).into());
+            }
+            CheckState::Error { message, .. } => {
+                widgets.push(text(format!("Error: {}", message)).size(18).into());
+            }
+            _ if self.update_info.has_updates() => {
+                widgets.push(
+                    text(format!(
+                        "{} updates available",
+                        self.update_info.total_updates
+                    ))
+                    .size(18)
+                    .into(),
+                );
 
-            // Only show package breakdown if package manager supports AUR
-            if let Some(pm) = self.config.package_manager {
-                if pm.supports_aur() {
-                    widgets.push(
-                        text(format!(
-                            "Official packages: {}",
-                            self.update_info.official_updates
-                        ))
-                        .into(),
-                    );
-                    widgets.push(
-                        text(format!("AUR packages: {}", self.update_info.aur_updates)).into(),
-                    );
+                // Only show package breakdown if package manager supports AUR
+                if let Some(pm) = self.config.package_manager {
+                    if pm.supports_aur() {
+                        widgets.push(
+                            text(format!(
+                                "Official packages: {}",
+                                self.update_info.official_updates
+                            ))
+                            .into(),
+                        );
+                        widgets.push(
+                            text(format!("AUR packages: {}", self.update_info.aur_updates)).into(),
+                        );
+                    }
                 }
             }
-        } else {
-            widgets.push(text("System is up to date").size(18).into());
+            _ => {
+                widgets.push(text("System is up to date").size(18).into());
+            }
         }
 
         // Last check time
-        if let Some(last_check) = self.last_check {
+        let last_check_at = match &self.check_state {
+            CheckState::Completed { at } => Some(*at),
+            CheckState::Error { at, .. } => *at,
+            _ => None,
+        };
+        if let Some(at) = last_check_at {
             widgets.push(
-                text(self.format_last_check_time(last_check))
+                text(Self::format_last_check_time(at))
                     .size(12)
                     .into(),
             );
@@ -754,7 +772,7 @@ impl CosmicAppletPackageUpdater {
     }
 
     /// Format the last check time in a human-readable format
-    fn format_last_check_time(&self, last_check: Instant) -> String {
+    fn format_last_check_time(last_check: Instant) -> String {
         let elapsed = last_check.elapsed();
         if elapsed.as_secs() < 60 {
             "Last checked: just now".to_string()
@@ -823,17 +841,7 @@ impl CosmicAppletPackageUpdater {
                     .width(cosmic::iced::Length::Fill)
                     .height(cosmic::iced::Length::Fixed(PACKAGE_LIST_HEIGHT)),
             )
-            .style(|_theme| cosmic::widget::container::Style {
-                background: Some(cosmic::iced_core::Background::Color(
-                    [0.1, 0.1, 0.1, 0.1].into(),
-                )),
-                border: cosmic::iced::Border {
-                    radius: cosmic::iced::border::Radius::from(8.0),
-                    width: 1.0,
-                    color: [0.3, 0.3, 0.3, 0.5].into(),
-                },
-                ..Default::default()
-            })
+            .class(cosmic::theme::Container::List)
             .padding(12)
             .width(cosmic::iced::Length::Fill)
             .into(),
@@ -923,17 +931,15 @@ impl CosmicAppletPackageUpdater {
                 .into(),
             );
             for &pm in &self.available_package_managers {
-                let is_selected = self.config.package_manager == Some(pm);
-                let button_text = if is_selected {
-                    format!("● {}", pm.name())
-                } else {
-                    format!("○ {}", pm.name())
-                };
                 widgets.push(
-                    button::text(button_text)
-                        .on_press(Message::SelectPackageManager(pm))
-                        .width(cosmic::iced::Length::Fill)
-                        .into(),
+                    radio(
+                        text(pm.name()),
+                        pm,
+                        self.config.package_manager,
+                        Message::SelectPackageManager,
+                    )
+                    .width(cosmic::iced::Length::Fill)
+                    .into(),
                 );
             }
         }
@@ -945,26 +951,26 @@ impl CosmicAppletPackageUpdater {
             widgets.push(text("NixOS Configuration").size(16).into());
 
             // Mode selection: Flakes vs Channels
-            let flakes_selected = matches!(self.config.nixos_config.mode, NixOSMode::Flakes);
+            let selected_mode = Some(self.config.nixos_config.mode);
             widgets.push(
                 row()
                     .spacing(8)
                     .push(
-                        button::text(if flakes_selected {
-                            "● Flakes"
-                        } else {
-                            "○ Flakes"
-                        })
-                        .on_press(Message::SetNixOSMode(NixOSMode::Flakes))
+                        radio(
+                            text("Flakes"),
+                            NixOSMode::Flakes,
+                            selected_mode,
+                            Message::SetNixOSMode,
+                        )
                         .width(cosmic::iced::Length::Fill),
                     )
                     .push(
-                        button::text(if !flakes_selected {
-                            "● Channels"
-                        } else {
-                            "○ Channels"
-                        })
-                        .on_press(Message::SetNixOSMode(NixOSMode::Channels))
+                        radio(
+                            text("Channels"),
+                            NixOSMode::Channels,
+                            selected_mode,
+                            Message::SetNixOSMode,
+                        )
                         .width(cosmic::iced::Length::Fill),
                     )
                     .into(),
@@ -984,6 +990,31 @@ impl CosmicAppletPackageUpdater {
             // Help text
             widgets.push(
                 text("Path to your NixOS configuration directory")
+                    .size(10)
+                    .into(),
+            );
+
+            widgets.push(Space::with_height(cosmic::iced::Length::Fixed(8.0)).into());
+
+            // Hostname input (for multi-host flake configurations)
+            widgets.push(text("Hostname").size(14).into());
+            let hostname_value = self.config.nixos_config.hostname.clone().unwrap_or_default();
+            widgets.push(
+                row()
+                    .spacing(8)
+                    .push(
+                        text_input("auto (default)", hostname_value)
+                            .on_input(Message::SetNixOSHostname)
+                            .width(cosmic::iced::Length::Fill),
+                    )
+                    .push(
+                        button::text("Detect")
+                            .on_press(Message::AutoDetectNixOSHostname),
+                    )
+                    .into(),
+            );
+            widgets.push(
+                text("Hostname for flake target (e.g. .#hostname). Leave empty for default.")
                     .size(10)
                     .into(),
             );

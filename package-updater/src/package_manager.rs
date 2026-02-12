@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 #[allow(deprecated)]
 use nix::fcntl::{flock, FlockArg};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -16,7 +16,7 @@ const LOCK_RETRY_DELAY_SECS: u64 = 2;
 const UPDATE_RETRY_DELAY_SECS: u64 = 1;
 
 // Compiled regex patterns for NixOS flake parsing
-static FLAKE_UPDATE_REGEX: Lazy<Regex> = Lazy::new(|| {
+static FLAKE_UPDATE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:Updated|updated|updating|Will update)\s+(?:input\s+)?['"]?([^\s':]+)['"]?:?\s+['"]?([^'"]+)['"]?\s+(?:->|→|to)\s+['"]?([^'"]+)['"]?"#).unwrap()
 });
 
@@ -91,9 +91,18 @@ impl PackageManager {
                                 .to_string()
                         }
                         crate::config::NixOSMode::Flakes => {
+                            let hostname = config
+                                .hostname
+                                .as_deref()
+                                .unwrap_or("");
+                            let flake_ref = if hostname.is_empty() {
+                                ".#".to_string()
+                            } else {
+                                format!(".#{}", hostname)
+                            };
                             format!(
-                                "cd {} && nix flake update && sudo nixos-rebuild switch --flake .#",
-                                config.config_path
+                                "cd {} && nix flake update && sudo nixos-rebuild switch --flake {}",
+                                config.config_path, flake_ref
                             )
                         }
                     }
@@ -274,13 +283,11 @@ impl UpdateChecker {
     }
 
     fn get_lock_path() -> PathBuf {
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-        PathBuf::from(runtime_dir).join("cosmic-package-updater.lock")
+        crate::paths::lock_path()
     }
 
     fn get_sync_path() -> PathBuf {
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-        PathBuf::from(runtime_dir).join("cosmic-package-updater.sync")
+        crate::paths::sync_path()
     }
 
     fn notify_check_completed() {

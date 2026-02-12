@@ -1,8 +1,8 @@
 mod app;
 mod config;
 mod package_manager;
+mod paths;
 mod polkit;
-mod virtualized_list;
 
 use app::CosmicAppletPackageUpdater;
 

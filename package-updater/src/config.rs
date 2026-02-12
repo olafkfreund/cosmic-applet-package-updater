@@ -5,7 +5,7 @@ use crate::package_manager::PackageManager;
 
 pub const CONFIG_VERSION: u64 = 1;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum NixOSMode {
     Channels,
     Flakes,
@@ -15,6 +15,8 @@ pub enum NixOSMode {
 pub struct NixOSConfig {
     pub mode: NixOSMode,
     pub config_path: String,
+    #[serde(default)]
+    pub hostname: Option<String>,
 }
 
 impl Default for NixOSConfig {
@@ -22,8 +24,17 @@ impl Default for NixOSConfig {
         Self {
             mode: NixOSMode::Flakes,
             config_path: "/etc/nixos".to_string(),
+            hostname: None,
         }
     }
+}
+
+/// Auto-detect the system hostname from /etc/hostname.
+pub fn detect_hostname() -> Option<String> {
+    std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
